@@ -1,7 +1,7 @@
 # Provider recovery proofs
 
 Native resume decisions are in `docs/design/provider-switching-native-resume.md`.
-The broader recovery acceptance matrix remains separate in #529.
+Track the wider acceptance matrix in `docs/design/provider-switching-recovery.md` and #529.
 No result is implied by the presence of these scripts.
 
 The first negative control uses the production session server and real pinned native CLIs:
@@ -39,3 +39,143 @@ Restoring into a different pathname while leaving the old home accessible can ma
 read/write the old file while the transcript route observes the restored copy. Such a run
 does not prove archive recovery. Retire the old directory, create an empty home at its old
 pathname, and restore only the actual archive plus selected synthetic credentials/config.
+
+## External persisted-phase crash barriers
+
+`gates.sql` installs a trigger only in the disposable proof database. Before a selected
+journal update commits, it holds an observable advisory lock while the previous phase stays
+visible. `barriers.mjs` checks the barrier against an isolated real PostgreSQL database: kill separate lifecycle/journal client processes, abort only the orphaned synthetic statement
+through its SQL gate, verify rollback, then release and continue. This self-test
+proves the fault mechanism, not application recovery.
+
+Dispatch `install-smoke` with `prove_provider_recovery=true` for the actual-worker matrix.
+It enables the same real native replacement rig and kills a real backend pod at ten write
+boundaries per replacement, including both sides of source-stop acknowledgement, and two
+cancellation boundaries. Two backend replicas must recover from the saved phase without
+changing authority twice. The stable backend Service address survives pod death; a port
+forward pins one backend and cannot serve as the recovery transport. Owner start/retry/cancel
+requests retry only their same idempotency key after a lost reply; message sends are not
+blindly retried. After each completed replacement, pause/resume the actual native generation
+and send a new owner turn, retaining one handover and the same native identity/PVC/history.
+
+The fault trigger is never installed by the application or exposed as a public control. It
+is released/dropped during proof cleanup. Record real dispatch outcomes before claiming the
+phase matrix passed. Additional runtime/pod/storage/auth faults remain separate acceptance
+rows; backend phase crashes do not establish them.
+
+## Native identity inside a multi-conversation archive
+
+Add `PROOF_AGENTS=codex PROOF_POISON_NATIVE_POINTER=1 PROOF_RESUME_ARCHIVE=1` to the
+local native archive control. It creates a second conversation with the real CLI, records
+its actual native ID, points the restored native metadata at it, then resumes using the
+committed identity. Both histories come from actual CLI execution. The resumed model must
+receive the original conversation and new owner turn without the other conversation's text.
+This checks native identity selection, not a crash/replica result.
+
+The external coordinator polls for the production lifecycle advisory key before killing a
+backend. It briefly parks competing workers on that advisory lease while the replacement
+initializes, then releases it; it holds no application table or row lock during startup. A held journal
+write plus queued schema DDL can otherwise block the proof's own observer. The real-PostgreSQL
+self-test reproduces that convoy and verifies handoff, schema completion and worker yield.
+The installed host can deny PostgreSQL backend-termination signals. A disconnected client
+also does not necessarily interrupt its deliberately unbounded query. The rig therefore
+waits for the separate lifecycle lease to prove backend death, then raises a SQL exception
+only inside the orphaned proof trigger. Blocking advisory waiters can also remain asleep after their lock is granted when the host
+denies database wakeup signals. Acquire through a short `pg_try_advisory_lock` polling loop
+instead, matching the product’s nonblocking lock primitive. Advisory handoff exits through a separate SQL release
+flag, without database signals. This models an interrupted uncommitted write explicitly; it
+does not claim that all real SQL automatically rolls back immediately on TCP disconnect.
+Observer commands have statement/lock/process deadlines, and cleanup commits gate release
+before dropping the trigger. The application exposes no fault-control endpoint.
+
+## Explicit context clear before native recovery
+
+```sh
+PROOF_AGENTS=codex PROOF_CONTEXT_CLEAR_BEFORE_RESUME=1 \
+PROOF_SOURCE_PREPARE=1 PROOF_RESUME_ARCHIVE=1 PROOF_NATIVE_DEFAULT=1 \
+PROOF_PROOT=/absolute/proot PROOF_OUT=/absolute/scratch/path \
+PROOF_CLI_BIN=/absolute/pinned/cli/bin node tests/ProviderRuntimeProof/capture.mjs
+```
+
+The managed real CLI clears its context, creates a new native ID, checkpoints and exits.
+The same control passes for Claude with `PROOF_AGENTS=claude` and without PROOF_PROOT;
+Codex needs the managed requirements mounted through the proot rig.
+The archive is restored into fresh home contents under the same path and managed runtime.
+Resume must select the checkpoint's active ID, not the original registry ID. The new owner
+request must include the post-clear task and omit the earlier cleared task. The local hub
+policy/model callbacks are fixtures; this does not establish backend replica recovery.
+
+## Ordinary session new-thread compatibility
+
+Use the managed Codex archive command above with
+`PROOF_ORDINARY_NEW_RESUME=1` instead of `PROOF_CONTEXT_CLEAR_BEFORE_RESUME=1`.
+The real terminal starts without any provider-switch request, runs an initial turn, sends
+`/new` and a second turn, then stops and restores its actual archive. Resume has no strict
+replacement flag. Its new owner turn must use the second native ID and context, while the
+production transcript retains both visible turns. This compatibility control passed locally;
+it is not a backend generation-switch or whole-browser acceptance result.
+
+## Native target process death
+
+Run the local archive capture command with `PROOF_CRASH_NATIVE_TARGET=1` instead of
+`PROOF_RESUME_ARCHIVE=1`. After the real native handover answer, the rig kills the isolated
+server's single actual PTY child. The runtime must exit unsuccessfully without starting a
+fresh CLI or making another handover request. The signal fix is isolated in #537; this control requires that patch. Both pinned CLIs passed after signal-aware
+exit classification; before the fix, the real PTY supplied code zero plus signal 9 and the
+runtime incorrectly reported success. This proves native-process handling, not kubelet
+restart policy, pod-loss reconciliation or backend crash recovery.
+
+## Container/pod crash and explicit owner resume
+
+Dispatch the same workflow with `prove_provider_recovery=true` and
+`provider_recovery_scope=runtime`. This skips journal crash gates and runs the real native
+replacement path plus planned pause/resume, then acknowledges a real native checkpoint and kills the exact session container task
+through the normal worker container runtime. This is a container/pod crash, including runtime
+PID 1, not a cluster native-child-only exit test. The local native-child selector/control
+remains a separate proof, including #537. The host denied the in-container kill attempt; no
+host confinement settings are changed to make it pass.
+
+The worker must observe the actual container terminate and session Failed. Its shipped
+Never restart policy must retain zero same-pod restarts during a further observation window.
+Only an explicit owner Resume may create another pod; assert the same native identity,
+strict archive requirement, empty startup prompt, same claim/dirty repositories, one visible
+handover and a new owner turn in the same generation. The recording model must also receive
+the checkpointed owner context after recovery. Only the acknowledged checkpoint is covered;
+uncheckpointed recent turns are not claimed durable. Run API-key and synthetic subscription
+Claude→Codex→Claude. This acceptance passed in worker run 42409310743: four container/pod crash and owner-resume cases, with the full workflow successful.
+This does not model kernel OOM, node loss or a target dying before generation commitment.
+
+## Held operations and real storage/network failure
+
+Dispatch `prove_provider_recovery=true` with `provider_recovery_scope=held`. This uses
+actual API-key native sources in both directions. It removes/restores the selected target
+API key or subscription Secret after review and tests preview/start refusal before source
+stop. A changed recorded claim UID must also refuse without touching the source.
+
+The storage fault narrows the existing object-storage NetworkPolicy to a label carried only
+by the source pod. Source checkpoint/stop can finish; the fresh target has no storage egress.
+Require a real failed native checkpoint before commit and retain queued input. Restoring the
+policy and owner Retry must finish the same target; deleting that unconfirmed target must
+instead stay held without replay or another pod. A separate source-pod-loss case holds
+before source stop and checks generation, queue, acknowledged source archive and no target.
+Read-only inspector pods compare actual retained repository bytes after pod loss.
+
+Worker run 42413821998 passed all eight cases and its full workflow: two storage repairs, two ambiguous target losses, two source losses and two scheduler holds. The budget row uses the AgentHub per-user budget (stand-in model), not real provider access. No production
+fault route, credential bypass or host policy change is introduced. The held source/target
+cases may need administrator preservation/deletion; no automatic rollback or migration is
+claimed. Generated output stays outside Git.
+
+The held scope also covers real scheduler refusal on a cordoned disposable worker node,
+restored scheduling of the same target UID, duplicate request idempotency, changed-review
+refusal, unknown endpoint model capacity and the personal Claude API-budget gate. These
+additional rows passed in worker run 42413821998; syntax checking alone is not acceptance.
+
+## Ordinary pause with damaged checkpoint metadata
+
+`PROOF_CORRUPT_NORMAL_CHECKPOINT=invalid` in the real CLI capture starts an ordinary
+session without provider-switch or strict-resume flags, damages its checkpoint after the
+real answer, and sends the real runtime SIGTERM used by pause. Require a new successful
+archive upload, extract it with real tar, and inspect its native turn and repaired identity.
+Repeat with `oversized` and `unwritable` (a directory occupying the checkpoint path).
+Both pinned CLIs pass all three variants; the pre-fix invalid Claude control uploaded no
+archive. This proves local normal-session persistence, not a new cluster crash matrix.

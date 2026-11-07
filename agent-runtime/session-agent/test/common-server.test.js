@@ -1447,3 +1447,38 @@ test('state archives use separate real 0700 temporary directories and remove the
     assert.ok(harness.commands.some(command => command.args.includes(path.join(directory, 'state.tgz'))));
   }
 });
+
+
+test('corrupt checkpoint metadata does not block ordinary pause/archive', t => {
+  const checkpoint = require('../../common/native-checkpoint');
+  const home = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'normal-checkpoint-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const nativeId = '11111111-1111-4111-8111-111111111111';
+  const committedId = '22222222-2222-4222-8222-222222222222';
+  const file = home + '/native.jsonl';
+  for (const corrupt of ['{', 'x'.repeat(2049)]) {
+    fs.writeFileSync(path.join(home, checkpoint.FILE), corrupt);
+    const harness = createHarness({ HOME: home, AGENTHUB_STATE_PUT_URL: 'https://example.com/state', AGENTHUB_NATIVE_SESSION_ID: committedId }, {
+      findTranscript: () => file,
+      checkpointNativeIdentity: ({ env }) => checkpoint.save(env, home, fs, nativeId)
+    }, { files: { [file]: '{}\n' } });
+    harness.signals.SIGTERM();
+    assert.equal(archives(harness).length, 1);
+    assert.deepEqual(checkpoint.read(home, fs), { version: 1, baseNativeId: committedId, nativeId });
+    assert.deepEqual(harness.exits, [0]);
+  }
+});
+
+test('checkpoint I/O failure is best effort for ordinary archives and strict for replacement archives', () => {
+  for (const flags of [{}, { AGENTHUB_REQUIRE_NATIVE_RESUME: '1', AGENTHUB_STATE_RESTORED: '1', AGENTHUB_RESUME: '1' }, { AGENTHUB_PROVIDER_SWITCH_ID: '11111111-1111-4111-8111-111111111111' }]) {
+    const file = '/home/agent/native.jsonl';
+    let attempted = false;
+    const harness = createHarness({ AGENTHUB_STATE_PUT_URL: 'https://example.com/state', ...flags }, {
+      findTranscript: () => file,
+      checkpointNativeIdentity() { attempted = true; throw new Error('Saved native checkpoint metadata is unavailable.'); }
+    }, { files: { [file]: '{}\n' } });
+    harness.signals.SIGTERM();
+    assert(attempted);
+    assert.equal(archives(harness).length, Object.keys(flags).length ? 0 : 1);
+  }
+});

@@ -86,6 +86,8 @@ function validateDriver(driver) {
   // Replacement admission is opt-in because readiness, archive and policy hooks must agree.
   if (driver.supportsProviderSwitch !== undefined && typeof driver.supportsProviderSwitch !== 'boolean')
     throw new Error('Agent driver supportsProviderSwitch must be a boolean');
+  if (driver.checkpointNativeIdentity !== undefined && typeof driver.checkpointNativeIdentity !== 'function')
+    throw new Error('Agent driver checkpointNativeIdentity must be a function');
   if (driver.nativeIdentity !== undefined && typeof driver.nativeIdentity !== 'function')
     throw new Error('Agent driver nativeIdentity must be a function');
   if (driver.turnHooks !== undefined && typeof driver.turnHooks !== 'boolean') {

@@ -338,3 +338,57 @@ test('a resumed Codex thread is moved to the session\'s model, and the command s
   assert.equal(driver.buildCommand({ ...env, AGENTHUB_RESUME: '0', AGENTHUB_MODEL_NAME: '' }, true).args.includes('--model'), false);
   assert.equal(driver.isResumeCommand({ cmd: 'codex', args: [...tui.args.slice(0, -1)] }), false);
 });
+
+test('strict native resume binds an archive pointer to the committed conversation', () => {
+  const home=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'codex-strict-resume-'));
+  const committed='11111111-1111-4111-8111-111111111111';
+  const other='22222222-2222-4222-8222-222222222222';
+  try{
+    const sessions=path.join(home,'sessions');fs.mkdirSync(sessions);
+    const expected=path.join(sessions,'rollout-'+committed+'.jsonl');
+    fs.writeFileSync(expected,JSON.stringify({type:'session_meta',payload:{id:committed}})+'\n');
+    fs.writeFileSync(path.join(sessions,'rollout-'+other+'.jsonl'),JSON.stringify({type:'session_meta',payload:{id:other}})+'\n');
+    fs.writeFileSync(path.join(home,driver.THREAD_ID_FILE),other+'\n');
+    fs.writeFileSync(path.join(home,'agenthub-native-checkpoint.json'),JSON.stringify({version:1,baseNativeId:committed,nativeId:committed}));
+    const env=environment({CODEX_HOME:home,AGENTHUB_REQUIRE_NATIVE_RESUME:'1',AGENTHUB_STATE_RESTORED:'1',AGENTHUB_RESUME:'1',AGENTHUB_NATIVE_SESSION_ID:committed});
+    driver.prepare(env);
+    assert.equal(driver.buildCommand(env,true).args.at(-1),committed);
+    assert.equal(driver.findTranscript({env,fs,launchedAt:Date.now()}),expected);
+  }finally{fs.rmSync(home,{recursive:true,force:true});}
+});
+
+test('strict native resume never discovers another recent rollout when the committed one is missing', () => {
+  const home=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'codex-strict-resume-'));
+  const committed='11111111-1111-4111-8111-111111111111';
+  const other='22222222-2222-4222-8222-222222222222';
+  try{
+    fs.mkdirSync(path.join(home,'sessions'));
+    fs.writeFileSync(path.join(home,'sessions','rollout-'+other+'.jsonl'),JSON.stringify({type:'session_meta',payload:{id:other}})+'\n');
+    fs.writeFileSync(path.join(home,driver.THREAD_ID_FILE),committed+'\n');
+    const env=environment({CODEX_HOME:home,AGENTHUB_REQUIRE_NATIVE_RESUME:'1',AGENTHUB_STATE_RESTORED:'1',AGENTHUB_RESUME:'1',AGENTHUB_NATIVE_SESSION_ID:committed});
+    driver.prepare(env);
+    assert.equal(driver.findTranscript({env,fs,launchedAt:Date.now()}),null);
+    assert.throws(()=>driver.prepare({...env,AGENTHUB_NATIVE_SESSION_ID:''}),/committed native conversation identity is unavailable/);
+  }finally{fs.rmSync(home,{recursive:true,force:true});}
+});
+
+test('native checkpoints preserve explicit context changes and legacy clear pointers', () => {
+  const checkpoint=require('../../common/native-checkpoint');
+  const home=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'codex-checkpoint-clear-'));
+  const original='11111111-1111-4111-8111-111111111111';
+  const cleared='22222222-2222-4222-8222-222222222222';
+  try{
+    fs.writeFileSync(path.join(home,driver.THREAD_ID_FILE),cleared+'\n');
+    const env=environment({CODEX_HOME:home,AGENTHUB_REQUIRE_NATIVE_RESUME:'1',AGENTHUB_STATE_RESTORED:'1',AGENTHUB_RESUME:'1',AGENTHUB_NATIVE_SESSION_ID:original});
+    driver.prepare(env);
+    assert.equal(driver.buildCommand(env,true).args.at(-1),cleared,'legacy explicit clears must not restore the original context');
+    checkpoint.save(env,home,fs,cleared);
+    fs.writeFileSync(path.join(home,driver.THREAD_ID_FILE),original+'\n');
+    driver.prepare(env);
+    assert.equal(driver.buildCommand(env,true).args.at(-1),cleared,'checkpointed active context wins over a stale pointer');
+    assert.equal(checkpoint.read(home,fs).baseNativeId,original);
+    assert.throws(()=>driver.prepare({...env,AGENTHUB_NATIVE_SESSION_ID:'33333333-3333-4333-8333-333333333333'}),/does not match/);
+    fs.writeFileSync(path.join(home,checkpoint.FILE),'{');
+    assert.throws(()=>driver.prepare(env),/metadata is invalid/);
+  }finally{fs.rmSync(home,{recursive:true,force:true});}
+});

@@ -175,23 +175,23 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
         renameSync(from, to) { renames.push({ from, to }); },
         readFileSync(file) {
           if (harnessOptions.files && file in harnessOptions.files) return harnessOptions.files[file];
-          throw new Error('ENOENT: ' + file);
+          throw Object.assign(new Error('ENOENT: ' + file), { code: 'ENOENT' });
         },
         readdirSync(dir) {
           const names = Object.keys(harnessOptions.files || {})
             .filter(file => path.dirname(file) === dir).map(file => path.basename(file));
-          if (names.length === 0) throw new Error('ENOENT: ' + dir);
+          if (names.length === 0) throw Object.assign(new Error('ENOENT: ' + dir), { code: 'ENOENT' });
           return names;
         },
         statSync(file) {
           if (harnessOptions.files && file in harnessOptions.files) {
             return { size: Buffer.byteLength(harnessOptions.files[file]), mtimeMs: harnessOptions.mtimeMs || 1 };
           }
-          throw new Error('ENOENT: ' + file);
+          throw Object.assign(new Error('ENOENT: ' + file), { code: 'ENOENT' });
         },
         openSync(file) {
           if (harnessOptions.files && file in harnessOptions.files) return file;
-          throw new Error('ENOENT: ' + file);
+          throw Object.assign(new Error('ENOENT: ' + file), { code: 'ENOENT' });
         },
         readSync(fd, buffer, offset, length, position) {
           return Buffer.from(harnessOptions.files[fd]).copy(buffer, offset, position, position + length);

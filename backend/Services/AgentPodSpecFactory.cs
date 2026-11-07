@@ -198,6 +198,7 @@ public static class AgentPodSpecFactory
             new() { Name = "AGENTHUB_AUTH_MODE", Value = record.AuthMode.ToString().ToLowerInvariant() },
             new() { Name = "AGENTHUB_SESSION_ID", Value = record.Id },
             new() { Name = "AGENTHUB_CLAUDE_SESSION_ID", Value = record.AgentSessionId },
+            new() { Name = "AGENTHUB_NATIVE_SESSION_ID", Value = record.AgentSessionId },
             new() { Name = "AGENTHUB_PORT", Value = context.Runtime.AgentPort.ToString() },
             // The agent needs its own address to hand the browser a preview URL for a
             // server it started itself; the browser reaches it by IP, not by name.

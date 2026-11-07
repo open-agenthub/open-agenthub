@@ -17,6 +17,8 @@ function prepare(env) {
   if (env.AGENTHUB_STATE_RESTORED === undefined) {
     env.AGENTHUB_STATE_RESTORED = fs.existsSync('/tmp/.state-restored') ? '1' : '0';
   }
+  const selected = require('../common/native-checkpoint').resolve(env, path.join(env.HOME || '/home/agent', '.claude'), fs, env.AGENTHUB_CLAUDE_SESSION_ID);
+  if (selected) env.AGENTHUB_CLAUDE_SESSION_ID = selected;
   if (env.AGENTHUB_AUTH_MODE === 'customendpoint') {
     // Read before the key leaves the server's environment, which every shell the agent opens
     // inherits; the CLI child gets it as ANTHROPIC_AUTH_TOKEN and nothing else does.
@@ -230,10 +232,14 @@ function resetFromText(text, from) {
   return /^\d{4}-\d{2}-\d{2}T/.test(suffix[1].trim()) ? suffix[1].trim() : null;
 }
 
+function nativeIdentity({ file }) { return path.basename(file, '.jsonl'); }
+
 module.exports = {
   supportsProviderSwitch: true,
   providerSwitchExitKeys: ['/exit', '\r'],
-  nativeIdentity: ({ file }) => path.basename(file, '.jsonl'),
+  nativeIdentity,
+  checkpointNativeIdentity: context => require('../common/native-checkpoint').save(
+    context.env, path.join(context.env.HOME || '/home/agent', '.claude'), context.fs, nativeIdentity(context)),
   modelCatalog: require('./model-catalog'),
   // Verified on 2.1.318 (docs/design/live-model-switch.md): `/model <id>` switches the running
   // conversation and keeps it. Mid-conversation it first asks "Switch model?" because the history

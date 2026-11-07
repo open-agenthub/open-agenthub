@@ -7,6 +7,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { killNativeChild } from '../ProviderRecoveryProof/native-child.mjs';
 const repo = path.resolve(import.meta.dirname, '../..');
 const out = process.env.PROOF_OUT;
 const bins = process.env.PROOF_CLI_BIN;
@@ -71,6 +72,10 @@ try {
   const agents=(process.env.PROOF_AGENTS||'claude,codex').split(',');
   assert(agents.length&&agents.every(agent=>['claude','codex'].includes(agent)));
   for (const agent of agents) {
+    const ordinaryNew=process.env.PROOF_ORDINARY_NEW_RESUME==='1';
+    const corruptNormal=process.env.PROOF_CORRUPT_NORMAL_CHECKPOINT;
+    if(corruptNormal)assert(['invalid','oversized','unwritable'].includes(corruptNormal)&&process.env.PROOF_SOURCE_PREPARE!=='1');
+    if(ordinaryNew)assert(agent==='codex'&&process.env.PROOF_SOURCE_PREPARE==='1','ordinary /new acceptance requires the managed Codex source rig');
     const root = path.join(out, agent); const home = path.join(root, 'home'); const work = path.join(root, 'work');
     for (const dir of [work, path.join(home, '.claude'), path.join(home, '.codex'), path.join(root, 'tmp')]) fs.mkdirSync(dir, { recursive: true });
     const apiKey = 'synthetic-history-key';
@@ -129,6 +134,7 @@ try {
       Object.assign(env,{AGENTHUB_REQUIRE_NATIVE_RESUME:'1',AGENTHUB_RESUME:'1',AGENTHUB_STATE_RESTORED:'0'});
       delete env.AGENTHUB_PROVIDER_SWITCH_ID;
     }
+    if(ordinaryNew||corruptNormal)delete env.AGENTHUB_PROVIDER_SWITCH_ID;
     let command = process.execPath, args = [path.join(repo, 'agent-runtime/session-agent/server.js')];
     if (process.env.PROOF_SOURCE_PREPARE === '1' && agent === 'codex') {
       assert(process.env.PROOF_PROOT && path.isAbsolute(process.env.PROOF_PROOT), 'managed source proof requires PROOF_PROOT');
@@ -192,8 +198,44 @@ try {
       const route = 'http://127.0.0.1:18674/agenthub/provider-switch';
       const state = await until(async () => {
         const current = await (await fetch(route, { headers: authority })).json();
-        return current.ready && current.markerSeen && current.nativeId && current;
+        return current.ready && (ordinaryNew||corruptNormal||current.markerSeen) && current.nativeId && current;
       });
+      if(corruptNormal){
+        assert(!env.AGENTHUB_PROVIDER_SWITCH_ID&&!env.AGENTHUB_REQUIRE_NATIVE_RESUME);
+        const directory=path.join(home,agent==='claude'?'.claude':'.codex');
+        if(corruptNormal==='unwritable')fs.mkdirSync(path.join(directory,'agenthub-native-checkpoint.json'));
+        else fs.writeFileSync(path.join(directory,'agenthub-native-checkpoint.json'),corruptNormal==='invalid'?'{':'x'.repeat(2049));
+        const before=archives.filter(item=>item.route==='/state/'+agent).length;
+        const stopped=new Promise(resolve=>child.once('exit',resolve));process.kill(-child.pid,'SIGTERM');await stopped;
+        assert.equal(child.exitCode,0);
+        const saved=archives.filter(item=>item.route==='/state/'+agent);assert(saved.length>before,'corrupt checkpoint must not block ordinary pause/archive upload');
+        const archive=path.join(root,'normal-pause.tgz');fs.writeFileSync(archive,saved.at(-1).bytes);
+        const restored=path.join(root,'normal-pause-restore');fs.mkdirSync(restored);execFileSync('tar',['xzf',archive,'-C',restored]);
+        if(corruptNormal!=='unwritable'){
+          const checkpoint=JSON.parse(fs.readFileSync(path.join(restored,agent==='claude'?'.claude':'.codex','agenthub-native-checkpoint.json'),'utf8'));
+          assert.equal(checkpoint.nativeId,state.nativeId);assert.equal(checkpoint.baseNativeId,state.nativeId);
+        }
+        assert(fs.readdirSync(restored,{recursive:true}).filter(file=>file.endsWith('.jsonl')).some(file=>fs.readFileSync(path.join(restored,file),'utf8').includes('HISTORY-'+agent+'-0')),'actual uploaded archive retains the native user turn');
+        console.log(agent+': '+corruptNormal+' checkpoint tolerated; ordinary runtime SIGTERM/pause uploaded real native archive with the same identity');
+        continue;
+      }
+      let resumeNativeId=state.nativeId;
+      let resumeHistory='HISTORY-'+agent+'-0';
+      if(process.env.PROOF_CRASH_NATIVE_TARGET==='1'){
+        assert(process.env.PROOF_SOURCE_PREPARE!=='1','native crash control uses the direct production server');
+        const inference=()=>requests.filter(item=>item.text.includes(resumeHistory)&&!item.route.includes('count_tokens'));
+        const before=inference().length;assert(before>0);
+        const exited=new Promise(resolve=>child.once('exit',resolve));
+        killNativeChild(child.pid,agent);
+        let timer;
+        try{await Promise.race([exited,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('native crash did not terminate the runtime')),20000);})]);}
+        finally{clearTimeout(timer);}
+        assert.notEqual(child.exitCode,0,'native crash must not report successful completion');
+        await sleep(1000);assert.equal(inference().length,before,'a crashed target must not replay its startup handover');
+        console.log(agent+': real native target killed after handover receipt; runtime exited without fresh startup or replay');
+        continue;
+      }
+      if(!ordinaryNew){
       assert(state.draining);
       socket.send(JSON.stringify({ type: 'input', data: 'BLOCKED-BEFORE-RELEASE\r' }));
       await sleep(500);
@@ -204,7 +246,27 @@ try {
       assert.equal((await release.json()).draining, false);
       assert(archives.some(item => item.route === '/state/' + agent && item.bytes.length > 0));
       fs.writeFileSync(path.join(root, 'state.tgz'), archives.filter(item => item.route === '/state/' + agent).at(-1).bytes);
-      if (process.env.PROOF_SOURCE_PREPARE === '1') {
+      }
+      if(ordinaryNew){
+        socket.send(JSON.stringify({type:'input',data:'/new'}));await sleep(200);
+        socket.send(JSON.stringify({type:'input',data:'\r'}));
+        await until(()=>Array.from({length:term.rows},(_,index)=>term.buffer.active.getLine(term.buffer.active.viewportY+index)?.translateToString(true)??'').some(line=>/^\s*›/.test(line)&&!line.includes('HISTORY-')));
+        socket.send(JSON.stringify({type:'input',data:'HISTORY-codex-1'}));await sleep(200);
+        socket.send(JSON.stringify({type:'input',data:'\r'}));
+        const changed=await until(async()=>{const current=await(await fetch(route,{headers:authority})).json();return current.nativeId&&current.nativeId!==state.nativeId&&(await transcript()).includes('Answer HISTORY-'+agent+'-1')&&current;});
+        resumeNativeId=changed.nativeId;resumeHistory='HISTORY-'+agent+'-1';
+        assert((await transcript()).includes('HISTORY-codex-0'),'Workspace history retains the earlier conversation across /new');
+        console.log('codex: ordinary generation-zero /new changed native identity and Workspace transcript');
+      }
+      if(process.env.PROOF_CONTEXT_CLEAR_BEFORE_RESUME==='1'){
+        assert(process.env.PROOF_SOURCE_PREPARE==='1','native clear proof requires the managed source rig');
+        const cleared=await fetch('http://127.0.0.1:18674/agenthub/context-clear',{method:'POST',headers:authority,body:JSON.stringify({followUp:'HISTORY-'+agent+'-1'})});
+        assert.equal(cleared.status,202,await cleared.clone().text());
+        const changed=await until(async()=>{const current=await(await fetch(route,{headers:authority})).json();return current.nativeId&&current.nativeId!==state.nativeId&&(await transcript()).includes('Answer HISTORY-'+agent+'-1')&&current;});
+        resumeNativeId=changed.nativeId;resumeHistory='HISTORY-'+agent+'-1';
+        console.log(agent+': actual context clear created a new native identity before archive recovery');
+      }
+      if (process.env.PROOF_SOURCE_PREPARE === '1'&&!ordinaryNew) {
         const nextRequest = '22222222-2222-4222-8222-222222222222';
         if(process.env.PROOF_SOURCE_SHELL==='1'){
           const shell=new WebSocket('ws://127.0.0.1:18674/shell');
@@ -264,12 +326,26 @@ try {
         for(const name of agent==='claude'?['.claude.json']:['.codex/config.toml','.codex/auth.json']){
           const source=path.join(previousHome,name);if(fs.existsSync(source))fs.copyFileSync(source,path.join(resumedHome,name));
         }
-        const resumedEnv={...env,HOME:resumedHome,AGENTHUB_RESUME:'1',AGENTHUB_STATE_RESTORED:'1',
-          AGENTHUB_REQUIRE_NATIVE_RESUME:'1',AGENTHUB_CLAUDE_SESSION_ID:state.nativeId,
+        const resumedEnv={...env,HOME:process.env.PROOF_SOURCE_PREPARE==='1'&&agent==='codex'?env.HOME:resumedHome,AGENTHUB_RESUME:'1',AGENTHUB_STATE_RESTORED:'1',
+          AGENTHUB_REQUIRE_NATIVE_RESUME:'1',AGENTHUB_CLAUDE_SESSION_ID:state.nativeId,AGENTHUB_NATIVE_SESSION_ID:state.nativeId,
           AGENTHUB_PROMPT:'STALE-SOURCE-PROMPT-MUST-NOT-RUN'};
-        if(agent==='codex')resumedEnv.CODEX_HOME=path.join(resumedHome,'.codex');
+        if(agent==='codex')resumedEnv.CODEX_HOME=process.env.PROOF_SOURCE_PREPARE==='1'?env.CODEX_HOME:path.join(resumedHome,'.codex');
         delete resumedEnv.AGENTHUB_PROVIDER_SWITCH_ID;
-        child=spawn(process.execPath,[path.join(repo,'agent-runtime/session-agent/server.js')],{env:resumedEnv,cwd:work,detached:true,stdio:['ignore',log,log]});
+        if(ordinaryNew){delete resumedEnv.AGENTHUB_REQUIRE_NATIVE_RESUME;delete resumedEnv.AGENTHUB_NATIVE_SESSION_ID;}
+        if(agent==='codex'&&process.env.PROOF_POISON_NATIVE_POINTER==='1'){
+          const sessions=path.join(resumedHome,'.codex/sessions');
+          const before=new Set(fs.readdirSync(sessions,{recursive:true}).filter(file=>file.endsWith('.jsonl')));
+          const other=spawn(path.join(bins,'codex'),['--no-daemon','exec','--sandbox','danger-full-access','--json','--dangerously-bypass-hook-trust','--skip-git-repo-check','OTHER-NATIVE-CONVERSATION'],{env:resumedEnv,cwd:work,stdio:['ignore',log,log]});
+          const exited=await new Promise((resolve,reject)=>{other.once('exit',resolve);other.once('error',reject);});
+          assert.equal(exited,0,'the second native conversation must be generated by the real CLI');
+          const added=fs.readdirSync(sessions,{recursive:true}).filter(file=>file.endsWith('.jsonl')&&!before.has(file));
+          assert.equal(added.length,1);
+          const metadata=JSON.parse(fs.readFileSync(path.join(sessions,added[0]),'utf8').split('\n')[0]);
+          assert.equal(metadata.type,'session_meta');assert.notEqual(metadata.payload.id,state.nativeId);
+          fs.writeFileSync(path.join(resumedHome,'.codex/agenthub-thread-id'),metadata.payload.id+'\n');
+        }
+
+        child=spawn(command,args,{env:resumedEnv,cwd:work,detached:true,stdio:['ignore',log,log]});
         await until(async()=>{await transcript();return true;});
         const resumedTerm=new Terminal({cols:120,rows:36,allowProposedApi:true});
         const resumedSocket=new WebSocket('ws://127.0.0.1:18674/');
@@ -278,13 +354,21 @@ try {
         await new Promise((resolve,reject)=>{resumedSocket.once('open',resolve);resumedSocket.once('error',reject);});
         resumedSocket.send(JSON.stringify({type:'resize',cols:120,rows:36}));
         try{
-          await until(async()=>{const current=await(await fetch(route,{headers:authority})).json();return current.ready&&current.nativeId===state.nativeId;});
+          if(agent==='codex'&&process.env.PROOF_POISON_NATIVE_POINTER==='1'){
+            const selected=await until(async()=>{const value=await(await fetch(route,{headers:authority})).json();return value.ready&&value.nativeId&&value;});
+            console.log('codex: committed native identity matches selected archive identity='+String(selected.nativeId===state.nativeId));
+            assert.equal(selected.nativeId,state.nativeId,'Strict resume must select the committed native identity, not another archived thread');
+          }
+          await until(async()=>{const current=await(await fetch(route,{headers:authority})).json();return current.ready&&current.nativeId===resumeNativeId;});
           await until(()=>Array.from({length:resumedTerm.rows},(_,index)=>resumedTerm.buffer.active.getLine(resumedTerm.buffer.active.viewportY+index)?.translateToString(true)??'').some(line=>/^\s*[›❯]/.test(line)&&!line.includes('HISTORY-')));
-          const prior=await transcript();assert(prior.includes('HISTORY-'+agent+'-0'));
+          const prior=await transcript();assert(prior.includes(resumeHistory));
           resumedSocket.send(JSON.stringify({type:'input',data:'FOLLOWUP-AFTER-NATIVE-RESUME'}));await sleep(200);
           resumedSocket.send(JSON.stringify({type:'input',data:'\r'}));
-          await until(()=>requests.some(item=>item.text.includes('FOLLOWUP-AFTER-NATIVE-RESUME')&&item.text.includes('HISTORY-'+agent+'-0')));
+          await until(()=>requests.some(item=>item.text.includes('FOLLOWUP-AFTER-NATIVE-RESUME')&&item.text.includes(resumeHistory)));
           assert(!requests.some(item=>item.text.includes('STALE-SOURCE-PROMPT-MUST-NOT-RUN')));
+          if(process.env.PROOF_CONTEXT_CLEAR_BEFORE_RESUME==='1')assert(!requests.filter(item=>item.text.includes('FOLLOWUP-AFTER-NATIVE-RESUME')).some(item=>item.text.includes('HISTORY-'+agent+'-0')));
+          if(ordinaryNew)assert(!requests.filter(item=>item.text.includes('FOLLOWUP-AFTER-NATIVE-RESUME')).some(item=>item.text.includes('HISTORY-codex-0')),'ordinary resume must continue the /new thread');
+          if(agent==='codex'&&process.env.PROOF_POISON_NATIVE_POINTER==='1')assert(!requests.filter(item=>item.text.includes('FOLLOWUP-AFTER-NATIVE-RESUME')).some(item=>item.text.includes('OTHER-NATIVE-CONVERSATION')));
           await until(async()=>(await transcript()).includes('FOLLOWUP-AFTER-NATIVE-RESUME'));
           text=await transcript();
           console.log(agent+': real archive restored into fresh home, same native identity/history, new owner turn and no stale source prompt passed');
@@ -298,14 +382,14 @@ try {
       const reconnect = new WebSocket('ws://127.0.0.1:18674/');
       await new Promise((resolve, reject) => { reconnect.once('open', resolve); reconnect.once('error', reject); });
       if(process.env.PROOF_RESUME_ARCHIVE==='1'){
-        const continued=await transcript();assert(continued.includes('HISTORY-'+agent+'-0'));assert(continued.includes('FOLLOWUP-AFTER-NATIVE-RESUME'));
+        const continued=await transcript();assert(continued.includes(resumeHistory));assert(continued.includes('FOLLOWUP-AFTER-NATIVE-RESUME'));
       }else assert.equal(await transcript(), text); reconnect.close();
       console.log(agent + ': native target handover, reserved input, state archive, release and reconnect passed');
     } finally {
       fs.writeFileSync(path.join(root, 'terminal.txt'), Array.from({ length: term.rows }, (_, n) =>
         term.buffer.active.getLine(term.buffer.active.viewportY + n)?.translateToString(true) ?? '').join('\n'));
       socket.close(); term.dispose();
-      process.kill(-child.pid, 'SIGTERM'); await new Promise(resolve => child.once('exit', resolve)); child = null;
+      if(child.exitCode===null){process.kill(-child.pid, 'SIGTERM'); await new Promise(resolve => child.once('exit', resolve));} child = null;
     }
   }
   fs.writeFileSync(path.join(out, 'model-requests.json'), JSON.stringify(requests, null, 2));

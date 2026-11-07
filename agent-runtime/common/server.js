@@ -603,6 +603,18 @@ function createCommonServer(options = {}) {
         setStateWithheld(true);
         return done && done(new Error('sign-in state withheld'));
       }
+      try {
+        if (typeof driver.checkpointNativeIdentity === 'function') {
+          const current = locateTranscript();
+          if (current) driver.checkpointNativeIdentity({ file: current, env, home, fs });
+        }
+      } catch (error) {
+        if (env.AGENTHUB_REQUIRE_NATIVE_RESUME === '1' || providerTargetRequest)
+          return done && done(new Error('The native conversation checkpoint could not be saved: ' + error.message));
+        // Ordinary sessions predate checkpoint metadata; an unwritable helper file must
+        // not discard their native archive or prevent pause from preserving real state.
+        console.warn('[agent] Native checkpoint unavailable; saving ordinary session state without it.');
+      }
       const revision = signInPrivacy.revision();
       let directory;
       try {

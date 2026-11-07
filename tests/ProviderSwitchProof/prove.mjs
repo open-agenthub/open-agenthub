@@ -10,20 +10,36 @@ const json = (...args) => JSON.parse(kubectl(...args,'-o','json'));
 const key = Buffer.from(json('-n',control,'get','secret','agenthub-api-key').data['api-key'],'base64').toString();
 const headers = {Authorization:'Bearer '+key,'Content-Type':'application/json'};
 const sleep = ms => new Promise(resolve=>setTimeout(resolve,ms));
-async function until(fn, description, attempts=600) {
+const backendUrl=process.env.PROOF_BACKEND_URL||'http://127.0.0.1:18880';
+let recovery=null;
+async function until(fn, description, attempts=process.env.PROOF_RECOVERY==='1'?2400:600) {
  let error;
- for(let n=0;n<attempts;n++){try{const value=await fn();if(value)return value;}catch(caught){if(caught?.fatal)throw caught;error=caught;}await sleep(500);}
+ for(let n=0;n<attempts;n++){try{recovery?.check();const value=await fn();if(value)return value;}catch(caught){if(caught?.fatal)throw caught;error=caught;}await sleep(500);}
  throw new Error(description+': '+(error?.message??'timeout'));
 }
 async function api(route,method='GET',body,expected=200){
- const response=await fetch('http://127.0.0.1:18880/api/'+route,{method,headers,body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(150000)});
- assert.equal(response.status,expected,method+' '+route+': '+await response.clone().text());
- const text=await response.text();return text?JSON.parse(text):null;
+ const idempotent=method==='GET'||(route.includes('/provider-switch')&&body?.requestId);
+ const attempts=recovery&&idempotent?120:1;
+ let last;
+ for(let attempt=0;attempt<attempts;attempt++){
+  recovery?.check();
+  try{
+   const response=await fetch(backendUrl+'/api/'+route,{method,headers,body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(150000)});
+   const text=await response.text();
+   if(recovery&&idempotent&&response.status===409&&text.includes('Session maintenance is already in progress.')){await sleep(500);continue;}
+   assert.equal(response.status,expected,method+' '+route+': '+text);
+   return text?JSON.parse(text):null;
+  }catch(error){
+   if(!recovery||!idempotent||!['TypeError','TimeoutError','AbortError'].includes(error.name))throw error;
+   last=error;await sleep(500);
+  }
+ }
+ throw last||new Error('Idempotent owner request remained busy: '+route);
 }
 async function openTerminal(id,kind='terminal'){
  return until(async()=>{
   const term=new Terminal({cols:120,rows:36,allowProposedApi:true});
-  const socket=new WebSocket('ws://127.0.0.1:18880/ws/sessions/'+id+'/'+kind,{headers:{Authorization:'Bearer '+key}});
+  const socket=new WebSocket(backendUrl.replace(/^http/,'ws')+'/ws/sessions/'+id+'/'+kind,{headers:{Authorization:'Bearer '+key}});
   socket.on('message',data=>term.write(data.toString()));
   term.onData(data=>{if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'input',data}));});
   try{await new Promise((resolve,reject)=>{
@@ -36,7 +52,7 @@ async function openTerminal(id,kind='terminal'){
   });}
   catch(error){socket.terminate();term.dispose();throw error;}
   socket.send(JSON.stringify({type:'resize',cols:120,rows:36}));
-  return {socket,close(){socket.close();term.dispose();}};
+  return {socket,screen(){return Array.from({length:term.rows},(_,index)=>term.buffer.active.getLine(term.buffer.active.viewportY+index)?.translateToString(true)??'');},close(){socket.close();term.dispose();}};
  },'connect actual terminal',240);
 }
 async function openSourceShell(id){
@@ -67,11 +83,16 @@ function seedSubscriptions(ownerKey){
   proofSecrets.push(name);
  }
 }
+if(process.env.PROOF_RECOVERY==='1'&&process.env.PROOF_RECOVERY_SCOPE==='journal'){
+ const {createRecoveryFaults}=await import('../ProviderRecoveryProof/faults.mjs');
+ recovery=createRecoveryFaults({api,json});
+}
 try{
  await until(async()=>{await api('credentials');return true;},'backend ready');
  await api('credentials','PUT',{anthropicApiKey:'synthetic-claude-proof',openAiApiKey:'synthetic-codex-proof'},204);
  let ownerKey;
- for(const authMode of ['ApiKey','Subscription']){
+ if(process.env.PROOF_RECOVERY_SCOPE==='held'){const {proveHeldRecovery}=await import('../ProviderRecoveryProof/held.mjs');await proveHeldRecovery({api,json,kubectl,openTerminal,openSourceShell,until,seedSubscriptions,headers,backendUrl,ns,control});}
+ else for(const authMode of ['ApiKey','Subscription']){
   if(authMode==='Subscription')seedSubscriptions(ownerKey);
   const created=await api('sessions','POST',{title:'Native provider replacement '+authMode,agent:'Claude',authMode,mode:'Interactive',
    ...(authMode==='Subscription'?{credentialId:'default'}:{}),prompt:'SWITCH-PROOF-0',autoApprove:false,policy:{allowedTools:['Bash'],allowedCommands:['printf'],allowedMcpTools:[]},
@@ -97,8 +118,10 @@ try{
   await api('sessions/'+id+'/provider-switch','POST',{...cancelSelection,reviewHash:cancelReview.reviewHash});
   await api('sessions/'+id+'/messages','POST',{body:'CANCEL-QUEUED-'+authMode,priority:true});
   await until(async()=>{const value=await api('sessions/'+id+'/provider-switch');return value.operation?.progress.phase==='requested'&&value.operation.progress.error;},'known open shell refuses source preparation');
+  await recovery?.arm(id,cancelId,true);
   await api('sessions/'+id+'/provider-switch/cancel','POST',{requestId:cancelId});
   await until(async()=>{const value=await api('sessions/'+id+'/provider-switch');return value.operation?.progress.phase==='cancelled';},'durable cancellation completes');
+  await recovery?.finish(cancelId);
   assert.equal(pod().metadata.uid,first.metadata.uid);
   await until(()=>{const rows=JSON.parse(exec(`node -e 'fetch(${JSON.stringify(process.env.PROOF_MODEL_URL+'/proof/requests')}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))'`));return rows.some(row=>row.agent==='claude'&&row.authMode===authMode&&row.containsCancelled);},'model receives queued source message after cancellation');
   await shell.close();shell=null;
@@ -116,6 +139,7 @@ try{
     handover:{target,instructions:'Preserve the dirty repositories and approval policy. Earlier native context is omitted.',task:'Continue SWITCH-PROOF-'+generation,decisions:'Use the same visible conversation.',pendingWork:'Verify files.',references:['/workspace/first/tracked.txt','/workspace/second/untracked.txt']}};
    const review=await api('sessions/'+id+'/provider-switch/preview','POST',selection);
    assert.equal(review.capacity.source,'native-minimum');assert(review.text.includes('Omitted:'));assert(review.text.length<=16000);
+   await recovery?.arm(id,selection.requestId);
    const started=await api('sessions/'+id+'/provider-switch','POST',{...selection,reviewHash:review.reviewHash});
    assert.equal(started.request.requestId,selection.requestId);
    const queued=await api('sessions/'+id+'/messages','POST',{body:'QUEUED-AFTER-HANDOVER-'+generation,priority:true});
@@ -136,6 +160,7 @@ try{
    },'actual replacement pod');
    terminal=await openTerminal(id);
    const finished=await until(async()=>{const state=await api('sessions/'+id+'/provider-switch');if(state.operation?.progress.error)throw Object.assign(new Error(state.operation.progress.error),{fatal:true});return state.operation?.progress.phase==='completed'&&state;},'complete durable replacement');
+   await recovery?.finish(selection.requestId);
    const cutoff=finished.completedUsage?.find(item=>item.generation===generation-1);
    assert(cutoff?.inputTokens>0&&cutoff?.outputTokens>0,'graceful source quit must flush real native usage before the generation cutoff');
    const native=finished.operation.progress.targetNativeId;
@@ -156,7 +181,7 @@ try{
     const nativeRequests=JSON.parse(exec(`node -e 'fetch(${JSON.stringify(process.env.PROOF_MODEL_URL+'/proof/requests')}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))'`));
     return nativeRequests.some(row=>row.marker==='SWITCH-PROOF-'+generation&&row.agent===target.toLowerCase()&&row.authMode===authMode);
    },'real native inference with selected target credential mode');
-   const late=await fetch('http://127.0.0.1:18880/internal/sessions/'+id+'/status',{method:'POST',headers:{'Content-Type':'application/json','X-Agent-Token':sourceToken},body:JSON.stringify({status:'Failed'})});assert.equal(late.status,401);
+   const late=await fetch(backendUrl+'/internal/sessions/'+id+'/status',{method:'POST',headers:{'Content-Type':'application/json','X-Agent-Token':sourceToken},body:JSON.stringify({status:'Failed'})});assert.equal(late.status,401);
    const page=await until(async()=>{const approvals=await api('sessions/'+id+'/permissions');for(const approval of approvals)await api('sessions/'+id+'/permissions/'+approval.id,'POST',{decision:'deny'});const rows=JSON.parse(exec(`node -e 'fetch(${JSON.stringify(process.env.PROOF_MODEL_URL+'/proof/requests')}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))'`));return rows.some(row=>row.marker==='SWITCH-PROOF-'+generation&&row.agent===target.toLowerCase()&&row.authMode===authMode&&row.containsQueued)&&await api('sessions/'+id+'/conversation?offset=0&max=500');},'model receives queued message after native handover');
    assert.equal(exec('test ! -e /workspace/provider-proof-not-authorized && printf absent'),'absent');
    if(generation===2)await until(()=>{
@@ -166,7 +191,7 @@ try{
    const users=page.entries.filter(entry=>entry.generation===generation&&entry.role==='user');
    assert.equal(users[0].text,review.text);
    assert(page.entries.some(entry=>entry.text.includes('SWITCH-PROOF-0')));
-   const archive=await fetch('http://127.0.0.1:18880/api/sessions/'+id+'/state',{headers:{Authorization:'Bearer '+key}});assert.equal(archive.status,200);
+   const archive=await fetch(backendUrl+'/api/sessions/'+id+'/state',{headers:{Authorization:'Bearer '+key}});assert.equal(archive.status,200);
    const listing=execFileSync('tar',['tzf','-'],{input:Buffer.from(await archive.arrayBuffer()),encoding:'utf8',maxBuffer:8*1024*1024});
    assert(listing.includes(native));assert(!/(^|\/)\.credentials\.json$|(^|\/)auth\.json$/m.test(listing));
    await sleep(500);
@@ -175,16 +200,83 @@ try{
    assert(gone>=0&&added>gone,'actual kubelet/API watch must observe source deletion before target creation');
    assert.equal((await api('sessions/'+id)).agent,target);
    console.log(authMode+' generation '+generation+': actual '+target+' pod, same dirty repos/PVC, fresh native/home/target-only auth, handover first, queued input afterwards, retired callback401 and native archive passed.');
+   if(process.env.PROOF_RECOVERY==='1'){
+    terminal.close();terminal=null;
+    await api('sessions/'+id+'/pause','POST');
+    await until(()=>{try{pod();return false;}catch{return true;}},'completed native pod pause');
+    await api('sessions/'+id+'/resume','POST');
+    const resumed=await until(()=>{const value=pod();return value.status.phase==='Running'&&value.status.containerStatuses?.some(item=>item.name==='agent'&&item.ready)&&value;},'completed native pod resume');
+    assert.notEqual(resumed.metadata.uid,current.metadata.uid);
+    assert.equal(json('-n',ns,'get','pvc',claimName).metadata.uid,claimUid);assert.equal(fingerprint(),baseline);
+    const restoredEnv=resumed.spec.containers.find(item=>item.name==='agent').env;
+    assert.equal(restoredEnv.find(item=>item.name==='AGENTHUB_REQUIRE_NATIVE_RESUME').value,'1');
+    assert(!restoredEnv.find(item=>item.name==='AGENTHUB_PROMPT').valueFrom);
+    assert.equal(restoredEnv.find(item=>item.name==='AGENTHUB_PROMPT').value??'','');
+    assert.equal(exec(`node -e 'process.stdout.write(String(!process.env.AGENTHUB_PROMPT))'`),'true');
+    terminal=await openTerminal(id);
+    await until(()=>terminal.screen().some(line=>/^\s*[›❯]/.test(line)&&!line.includes('SWITCH-PROOF-')),'resumed native composer');
+    const nativeState=JSON.parse(exec(`node -e 'fetch("http://127.0.0.1:7681/agenthub/provider-switch",{headers:{"X-Agent-Token":process.env.AGENTHUB_CALLBACK_TOKEN}}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))'`));
+    assert.equal(nativeState.nativeId,native);
+    const followup='OWNER-AFTER-RESUME-'+authMode+'-'+generation;
+    terminal.socket.send(JSON.stringify({type:'input',data:followup}));await sleep(200);
+    terminal.socket.send(JSON.stringify({type:'input',data:'\r'}));
+    const continued=await until(async()=>{const value=await api('sessions/'+id+'/conversation?offset=0&max=500');return value.entries.some(entry=>entry.generation===generation&&entry.role==='user'&&entry.text.includes(followup))&&value;},'continued owner turn persists in same native generation');
+    assert.equal(continued.entries.filter(entry=>entry.generation===generation&&entry.role==='user'&&entry.text===review.text).length,1);
+    assert.equal((await api('sessions/'+id)).executionGeneration,generation);
+    console.log(authMode+' generation '+generation+': real native archive resume, same native identity/PVC/history, one handover and new owner turn passed.');
+    if(process.env.PROOF_RECOVERY_SCOPE==='runtime'){
+     await until(async()=>{const value=await api('sessions/'+id+'/conversation?offset=0&max=500');const at=value.entries.findIndex(entry=>entry.generation===generation&&entry.role==='user'&&entry.text.includes(followup));return at>=0&&value.entries.slice(at+1).some(entry=>entry.generation===generation&&entry.role==='assistant');},'owner turn finishes before native death');
+     assert.equal(resumed.spec.restartPolicy,'Never');terminal.close();terminal=null;
+     const checkpointId=crypto.randomUUID();
+     const checkpointProgram=`const requestId=${JSON.stringify(checkpointId)};fetch("http://127.0.0.1:7681/agenthub/provider-switch",{method:"POST",headers:{"X-Agent-Token":process.env.AGENTHUB_CALLBACK_TOKEN,"Content-Type":"application/json"},body:JSON.stringify({requestId,action:"prepare"})}).then(async response=>process.stdout.write(JSON.stringify({status:response.status,body:await response.json()})))`;
+     await until(()=>{const value=JSON.parse(kubectl('-n',ns,'exec',podName,'-c','agent','--','node','-e',checkpointProgram));return value.status===200&&value.body.checkpointed;},'acknowledged native checkpoint before abrupt container loss');
+     const cancelled=JSON.parse(kubectl('-n',ns,'exec',podName,'-c','agent','--','node','-e',`fetch("http://127.0.0.1:7681/agenthub/provider-switch",{method:"DELETE",headers:{"X-Agent-Token":process.env.AGENTHUB_CALLBACK_TOKEN,"Content-Type":"application/json"},body:JSON.stringify({requestId:${JSON.stringify(checkpointId)}})}).then(async response=>process.stdout.write(JSON.stringify({status:response.status,body:await response.json()})))`));
+     assert.equal(cancelled.status,200);
+     const containerId=pod().status.containerStatuses.find(item=>item.name==='agent').containerID.replace(/^containerd:\/\//,'');
+     assert(/^[0-9a-f]{64}$/.test(containerId),'fault only the recorded disposable session container');
+     execFileSync('sudo',['k3s','ctr','-n','k8s.io','tasks','kill','--signal','SIGKILL',containerId],{stdio:'pipe'});
+     const failed=await until(async()=>{const value=pod(),agent=value.status.containerStatuses?.find(item=>item.name==='agent');return agent?.state?.terminated&&(await api('sessions/'+id)).phase==='Failed'&&value;},'real kubelet observes failed native container');
+     assert.equal(failed.metadata.uid,resumed.metadata.uid);assert.equal(failed.status.containerStatuses.find(item=>item.name==='agent').restartCount,0);
+     await sleep(5000);
+     const held=pod();assert.equal(held.metadata.uid,resumed.metadata.uid);assert.equal(held.status.containerStatuses.find(item=>item.name==='agent').restartCount,0);
+     assert(held.status.containerStatuses.find(item=>item.name==='agent').state.terminated,'Never policy prevents automatic same-pod replay');
+     await api('sessions/'+id+'/resume','POST');
+     const recovered=await until(()=>{const value=pod();return value.metadata.uid!==held.metadata.uid&&value.status.containerStatuses?.some(item=>item.name==='agent'&&item.ready)&&value;},'owner explicitly resumes failed native generation');
+     assert.equal(json('-n',ns,'get','pvc',claimName).metadata.uid,claimUid);assert.equal(fingerprint(),baseline);
+     const recoveredEnv=recovered.spec.containers.find(item=>item.name==='agent').env;
+     assert.equal(recoveredEnv.find(item=>item.name==='AGENTHUB_REQUIRE_NATIVE_RESUME').value,'1');
+     assert(!recoveredEnv.find(item=>item.name==='AGENTHUB_PROMPT').valueFrom);
+     assert.equal(recoveredEnv.find(item=>item.name==='AGENTHUB_PROMPT').value??'','');
+     assert.equal(exec(`node -e 'process.stdout.write(String(!process.env.AGENTHUB_PROMPT))'`),'true');
+     terminal=await openTerminal(id);
+     await until(()=>terminal.screen().some(line=>/^\s*[›❯]/.test(line)&&!line.includes('SWITCH-PROOF-')),'recovered native composer');
+     const recoveredState=JSON.parse(exec(`node -e 'fetch("http://127.0.0.1:7681/agenthub/provider-switch",{headers:{"X-Agent-Token":process.env.AGENTHUB_CALLBACK_TOKEN}}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))'`));
+     assert.equal(recoveredState.nativeId,native);
+     const afterCrash='OWNER-AFTER-CRASH-'+authMode+'-'+generation;
+     terminal.socket.send(JSON.stringify({type:'input',data:afterCrash}));await sleep(200);terminal.socket.send(JSON.stringify({type:'input',data:'\r'}));
+     const history=await until(async()=>{const value=await api('sessions/'+id+'/conversation?offset=0&max=500');return value.entries.some(entry=>entry.generation===generation&&entry.role==='user'&&entry.text.includes(afterCrash))&&value;},'new owner turn after explicit crash recovery');
+     assert.equal(history.entries.filter(entry=>entry.generation===generation&&entry.role==='user'&&entry.text===review.text).length,1);
+     assert(history.entries.some(entry=>entry.generation===generation&&entry.role==='user'&&entry.text.includes(followup)));
+     await until(()=>{const receipts=JSON.parse(exec(`node -e 'fetch(${JSON.stringify(process.env.PROOF_MODEL_URL+'/proof/requests')}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))'`));return receipts.some(item=>item.agent===target.toLowerCase()&&item.authMode===authMode&&item.marker==='SWITCH-PROOF-'+generation&&item.containsAfterCrash&&item.containsResumed);},'post-crash model receives checkpointed owner context');
+     assert.equal((await api('sessions/'+id)).executionGeneration,generation);
+     console.log(authMode+' generation '+generation+': actual container/pod crash via containerd task SIGKILL, Never policy/no same-pod restart, owner resume with same native identity/PVC/history and one handover passed.');
+    }
+
+   }
+
   }
   watcher.kill('SIGTERM');watcher=null;terminal.close();terminal=null;
   await api('sessions/'+id,'DELETE',undefined,204);id=null;
   await until(()=>{try{json('-n',ns,'get','pvc',claimName);return false;}catch{return true;}},'workspace cleanup');
  }
- console.log('PASS: real backend + Postgres + object storage + kubelet + pinned CLIs, API-key and synthetic subscription Claude→Codex→Claude, both native model lists without supplied context-window metadata.');
+ console.log(process.env.PROOF_RECOVERY_SCOPE==='held'?'PASS: held credential/claim/checkpoint/target-loss cases against real native runtimes and storage/network policy.':'PASS: real backend + Postgres + object storage + kubelet + pinned CLIs, API-key and synthetic subscription Claude→Codex→Claude, both native model lists without supplied context-window metadata.');
 }catch(error){
+ console.error('Native provider proof failed:',error.message);
+ recovery?.diagnostics();
  if(id){try{console.error('Pod status:',JSON.stringify(json('-n',ns,'get','pod','session-'+id).status));}catch{}try{console.error(kubectl('-n',ns,'logs','session-'+id,'-c','agent','--tail=100'));}catch{}try{console.error('Operation:',JSON.stringify(await api('sessions/'+id+'/provider-switch')));}catch{}try{console.error('Model receipts:',kubectl('-n',ns,'exec','session-'+id,'-c','agent','--','node','-e',`fetch(${JSON.stringify(process.env.PROOF_MODEL_URL+'/proof/requests')}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))`));}catch{}}
  throw error;
 }finally{
+ await recovery?.close();
  await shell?.close();terminal?.close();watcher?.kill('SIGTERM');
  if(id){try{await api('sessions/'+id,'DELETE',undefined,204);}catch{console.error('Session cleanup held; inspect retained claim in the disposable cluster.');}}
  for(const name of proofSecrets){try{kubectl('-n',ns,'delete','secret',name);}catch{}}

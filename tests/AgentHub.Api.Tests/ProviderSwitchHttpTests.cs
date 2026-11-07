@@ -3,6 +3,10 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using AgentHub.Api.Controllers;
+using AgentHub.Api.Browser;
+using AgentHub.Api.Persistence;
+using AgentHub.Api.Storage;
+using Microsoft.AspNetCore.Http;
 using AgentHub.Api.Models;
 using AgentHub.Api.Services;
 using k8s;
@@ -55,6 +59,61 @@ public class ProviderSwitchHttpTests
             Assert.False((await database.Sessions.GetAsync("alice", "s"))!.ProviderSwitchPending);
         }
         finally { await app.StopAsync(); }
+    }
+
+    [PostgreSqlFact]
+    public async Task StartingSourceShowsClearUnavailableReasonUntilKubeletReadiness()
+    {
+        await using var database = await PostgresSharingDatabase.CreateAsync(pooling: false);
+        var cfg = database.Configuration;
+        cfg["AgentHub:WorkspaceVolumePersistent"] = "true";
+        cfg["AgentHub:Namespace"] = "readiness-proof";
+        cfg["S3:Bucket"] = "proof"; cfg["S3:ServiceUrl"] = "http://127.0.0.1:1";
+        cfg["S3:AccessKey"] = "synthetic-readiness"; cfg["S3:SecretKey"] = "synthetic-readiness-secret";
+        await database.Sessions.UpsertAsync(new() { Id = "ready", Owner = "alice", Agent = AgentKind.Claude,
+            Mode = SessionMode.Interactive, UiMode = SessionUiMode.Terminal, Status = "Running",
+            AgentSessionId = "native", CallbackToken = "source" });
+        var workspaces = new PostgresSessionWorkspaceStore(cfg); await workspaces.InitializeAsync();
+        await workspaces.AddAsync("alice", new("ready", "workspace-ready", "claim", "10Gi", null, "nonce", "[]"));
+        var fence = new PostgresExecutionFence(cfg);
+        var journal = new PostgresProviderSwitchStore(cfg, fence); await journal.InitializeAsync();
+        var executions = new PostgresSessionExecutionStore(cfg); await executions.InitializeAsync();
+        var messages = new PostgresSessionMessageStore(cfg); await messages.InitializeAsync();
+        var ready = 0;
+        var kubeBuilder = WebApplication.CreateBuilder(); kubeBuilder.Logging.ClearProviders();
+        await using var kube = kubeBuilder.Build(); kube.Urls.Add("http://127.0.0.1:0");
+        kube.MapGet("/api/v1/namespaces/readiness-proof/pods/session-ready", () => Results.Json(new {
+            apiVersion = "v1", kind = "Pod", metadata = new { name = "session-ready", uid = "source-pod" },
+            status = new { phase = "Running", podIP = "127.0.0.1", containerStatuses = new[] {
+                new { name = "agent", ready = Volatile.Read(ref ready) == 1, restartCount = 0, image = "example.com/runtime:proof", imageID = "proof" } } }
+        }));
+        await kube.StartAsync();
+        using var cluster = new Kubernetes(new KubernetesClientConfiguration { Host = kube.Urls.Single() });
+        using var transport = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false });
+        var pods = new AgentPodRequests(transport, new KubernetesAgentPodIdentityResolver(cluster, "readiness-proof"), fence, database.Sessions);
+        var delivery = new SessionMessageDelivery(pods, database.Sessions, messages, cfg, NullLogger<SessionMessageDelivery>.Instance, journal);
+        var service = new KubernetesSessionService(cfg, database.Sessions, null!, new S3ArtifactStore(cfg), null!, null!, null!, null!,
+            null!, null!, null!, null!, NullLogger<KubernetesSessionService>.Instance, cluster: cluster, podRequests: pods,
+            runtimeUpdateLock: new PostgresSessionExpiryLock(cfg), executions: executions, workspaceStore: workspaces,
+            providerSwitches: journal, switchMessages: messages, switchDelivery: delivery);
+        var builder = WebApplication.CreateBuilder(); builder.Logging.ClearProviders();
+        builder.Services.AddSingleton<ISessionService>(service);
+        builder.Services.AddControllers().AddApplicationPart(typeof(ProviderSwitchController).Assembly);
+        builder.Services.AddAuthentication("proof").AddScheme<AuthenticationSchemeOptions, OwnerAuth>("proof", _ => { }); builder.Services.AddAuthorization();
+        await using var app = builder.Build(); app.Urls.Add("http://127.0.0.1:0");
+        app.UseAuthentication(); app.UseAuthorization(); app.MapControllers(); await app.StartAsync();
+        try
+        {
+            using var http = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) }; http.DefaultRequestHeaders.Add("X-Proof-Owner", "alice");
+            var starting = await http.GetFromJsonAsync<ProviderSwitchAvailability>("/api/sessions/ready/provider-switch");
+            Assert.False(starting!.Available); Assert.Equal("The session is still starting. Try again in a moment.", starting.Reason);
+            Volatile.Write(ref ready, 1);
+            Assert.True((await http.GetFromJsonAsync<ProviderSwitchAvailability>("/api/sessions/ready/provider-switch"))!.Available);
+            Assert.False((await database.Sessions.GetAsync("alice", "ready"))!.ProviderSwitchPending);
+            http.DefaultRequestHeaders.Remove("X-Proof-Owner"); http.DefaultRequestHeaders.Add("X-Proof-Owner", "bob");
+            Assert.Equal(HttpStatusCode.NotFound, (await http.GetAsync("/api/sessions/ready/provider-switch")).StatusCode);
+        }
+        finally { await app.StopAsync(); await kube.StopAsync(); }
     }
 
     [PostgreSqlFact]
