@@ -31,7 +31,8 @@ public static class SessionTranscripts
         Func<CancellationToken, Task<IReadOnlyList<TranscriptEntry>?>>? live = null)
     {
         if (live is not null && await live(ct) is { Count: > 0 } current)
-            return ConversationPage.FromEntries(id, phase, current, offset, max);
+            return ConversationPage.FromEntries(id, phase, sessions is IExecutionConversationSource history
+                ? await history.ComposeExecutionHistoryAsync(owner, id, current, ct) : current, offset, max);
         var entries = await sessions.GetConversationAsync(owner, id, ct);
         if (entries is { Count: > 0 }) return ConversationPage.FromEntries(id, phase, entries, offset, max);
         var text = await sessions.GetTranscriptAsync(owner, id, ct);
