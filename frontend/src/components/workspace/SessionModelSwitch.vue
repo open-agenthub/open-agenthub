@@ -52,9 +52,11 @@ watch(() => props.session.modelName, value => {
 })
 onMounted(load)
 
+// Read again on every open: the list the bar loaded with may predate the agent's first report
+// (#461 pushes one shortly after the CLI started), and the hub answers from its cache.
 function toggle() {
   open.value = !open.value
-  if (open.value) { draft.value = current.value; result.value = null }
+  if (open.value) { draft.value = current.value; result.value = null; void load() }
 }
 async function apply() {
   if (!ready.value) return
@@ -77,18 +79,24 @@ async function apply() {
     applying.value = false
   }
 }
+// On the document: after a switch the button that had focus is disabled, focus falls back to the
+// page, and an Escape handled only inside the picker would leave it open.
 function onKey(event) {
-  if (event.key === 'Escape' && open.value) { open.value = false; event.stopPropagation() }
+  if (event.key === 'Escape' && open.value) open.value = false
 }
 function onOutside(event) {
   if (open.value && root.value && !root.value.contains(event.target)) open.value = false
 }
-onMounted(() => document.addEventListener('pointerdown', onOutside))
-onBeforeUnmount(() => { generation += 1; document.removeEventListener('pointerdown', onOutside) })
+onMounted(() => { document.addEventListener('pointerdown', onOutside); document.addEventListener('keydown', onKey) })
+onBeforeUnmount(() => {
+  generation += 1
+  document.removeEventListener('pointerdown', onOutside)
+  document.removeEventListener('keydown', onKey)
+})
 </script>
 
 <template>
-  <div v-if="view" ref="root" class="model-switch" data-model-switch @keydown="onKey">
+  <div v-if="view" ref="root" class="model-switch" data-model-switch>
     <button v-if="canSwitch" type="button" class="chip" data-model-switch-toggle :aria-expanded="open" aria-haspopup="dialog"
       :title="switchModeNote(mode, session.agent)" @click="toggle">
       <span class="label">Model</span><span class="mono value" data-model-current>{{ current || 'CLI default' }}</span><span aria-hidden="true">▾</span>

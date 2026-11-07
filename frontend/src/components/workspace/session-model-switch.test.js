@@ -88,3 +88,18 @@ describe('session model switch', () => {
     wrapper.unmount()
   })
 })
+
+describe('closing the picker', () => {
+  it('closes on Escape wherever the focus went, and reads the list again on every open', async () => {
+    const api = client()
+    const wrapper = await opened({ session, client: api })
+    expect(wrapper.find('[data-model-switch-pop]').exists()).toBe(true)
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    expect(wrapper.find('[data-model-switch-pop]').exists()).toBe(false)
+    await wrapper.get('[data-model-switch-toggle]').trigger('click')
+    await flushPromises()
+    expect(api.sessionModels).toHaveBeenCalledTimes(3)
+    wrapper.unmount()
+  })
+})
