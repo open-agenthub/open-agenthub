@@ -155,7 +155,7 @@ app.MapGet("/proof/parity", async (ISessionService svc) =>
         [new Claim("preferred_username", "alice")], "proof")) };
     var remote = new RemoteController((_, _) => Task.FromResult<RemoteCaller?>(new("alice", null)), svc)
         { ControllerContext = new ControllerContext { HttpContext = context } };
-    context.Request.Headers.Authorization = "Bearer synthetic-owner-token";
+    context.Request.Headers.Authorization = "Bearer oah_synthetic_owner_token";
     var response = await remote.Transcript(SessionId, 0, 100_000, default);
     var page = (TranscriptPage)((OkObjectResult)response.Result!).Value!;
     var mcp = new AgentHub.Api.Mcp.AgentHubMcpTools(new HttpContextAccessor { HttpContext = context }, svc,
