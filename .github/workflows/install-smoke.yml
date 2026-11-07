@@ -163,6 +163,11 @@ jobs:
           KUBECONFIG: /etc/rancher/k3s/k3s.yaml
         run: bash tests/OidcStartupProof/install.sh
 
+      - name: Prove team login with the audit identity service
+        env:
+          KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        run: bash tests/OidcStartupProof/keycloak-install.sh
+
       - name: Diagnostics
         if: failure()
         env:

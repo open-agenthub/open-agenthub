@@ -19,3 +19,9 @@ reaches the real Admin API. Finally the script restores the original API-key qui
 This test-only HTTP setup does not prove public TLS ingress or an external provider's UI.
 The stand-in uses the protocol/claims expected from a compatible identity broker; it is
 not a verification of every provider's own client configuration.
+
+`keycloak-install.sh` additionally reuses the #480 audit's pinned identity image and realm
+fixture, replaces the users with a generated test-only team-admin password, disables password
+grants, and drives the actual frontend login and callback in Chromium. It verifies a refresh
+token, actual refresh exchange and authenticated admin requests before restoring quickstart.
+It runs after the protocol proof in install-smoke. Generated credentials and output are ephemeral.
