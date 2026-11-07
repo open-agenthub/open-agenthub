@@ -46,3 +46,8 @@ Credential evidence combines resolved container environment, native auth files, 
 opposite-provider mounts/key files, and the recording model's accepted credential mode.
 The non-root container can deny `/proc/1/environ`; the proof respects that boundary and
 never adds privilege or disables isolation to inspect credentials.
+
+Fresh homes may contain `.claude/skills`: the common skill library intentionally creates that
+shared root and links `.agents/skills` to it even for Codex. Fresh-native-state assertions
+therefore reject opposite-provider credential/history paths and a unique marker placed in
+each source native state directory, rather than treating the shared skill root as a resume.
