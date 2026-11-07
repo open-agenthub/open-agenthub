@@ -7,6 +7,8 @@ import fs from 'node:fs'
 
 const HOME = process.env.HOME
 export const HUB = 'https://hub.example.com'
+// Exact origin, not a prefix: "https://hub.example.com.evil.example" also starts with HUB.
+export const onHub = url => { try { return new URL(String(url)).origin === HUB } catch { return false } }
 export async function launch() {
   const spki = fs.readFileSync(`${HOME}/rig/m2/pki/spki.txt`, 'utf8').trim()
   return chromium.launch({
@@ -22,6 +24,6 @@ export async function signIn(context, user, password) {
   await page.waitForSelector('#username, input[name=username]', { timeout: 120000 })
   await page.fill('#username', user)
   await page.fill('#password', password)
-  await Promise.all([page.waitForURL(u => u.toString().startsWith(HUB), { timeout: 120000 }), page.click('#kc-login')])
+  await Promise.all([page.waitForURL(onHub, { timeout: 120000 }), page.click('#kc-login')])
   return page
 }

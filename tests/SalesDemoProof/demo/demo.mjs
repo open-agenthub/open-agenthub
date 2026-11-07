@@ -8,7 +8,7 @@
 // the Git host only, and the scenes say so on screen in the edit.
 import fs from 'node:fs'
 import path from 'node:path'
-import { attach, ensureSignedIn, HUB } from './cdp.mjs'
+import { attach, ensureSignedIn, HUB, onHub } from './cdp.mjs'
 
 const out = path.resolve(process.argv[2] || 'demo-out')
 fs.mkdirSync(`${out}/frames`, { recursive: true })
@@ -92,7 +92,7 @@ await pause(alice, 800)
 await type(alice, alice.locator('#username'), 'alice')
 await type(alice, alice.locator('#password'), 'alice-demo-pw', 15)
 await ring(alice, alice.locator('#kc-login'), 500)
-await Promise.all([alice.waitForURL(u => u.toString().startsWith(HUB), { timeout: 120000 }), alice.locator('#kc-login').click()])
+await Promise.all([alice.waitForURL(onHub, { timeout: 120000 }), alice.locator('#kc-login').click()])
 await alice.waitForLoadState('networkidle').catch(() => {})
 await pause(alice, 3000)
 

@@ -5,22 +5,24 @@ import { chromium } from 'playwright-core'
 export const PORTS = { alice: 9301, bob: 9302, carol: 9303 }
 export const PASSWORDS = { alice: 'alice-demo-pw', bob: 'bob-demo-pw', carol: 'carol-demo-pw' }
 export const HUB = 'https://hub.example.com'
+// Exact origin, not a prefix: "https://hub.example.com.evil.example" also starts with HUB.
+export const onHub = url => { try { return new URL(String(url)).origin === HUB } catch { return false } }
 export async function attach(user) {
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${PORTS[user]}`)
   const context = browser.contexts()[0]
-  const page = context.pages().find(p => p.url().startsWith(HUB)) || context.pages()[0] || await context.newPage()
+  const page = context.pages().find(p => onHub(p.url())) || context.pages()[0] || await context.newPage()
   await page.setViewportSize({ width: 1920, height: 1080 })
   return { browser, context, page }
 }
 export async function ensureSignedIn(page, user) {
-  if (!page.url().startsWith(HUB)) await page.goto(HUB, { waitUntil: 'domcontentloaded' })
+  if (!onHub(page.url())) await page.goto(HUB, { waitUntil: 'domcontentloaded' })
   const signIn = page.getByRole('button', { name: 'Sign in' })
   if (await signIn.isVisible({ timeout: 5000 }).catch(() => false)) {
     await signIn.click()
     await page.waitForSelector('#username', { timeout: 120000 })
     await page.fill('#username', user)
     await page.fill('#password', PASSWORDS[user])
-    await Promise.all([page.waitForURL(u => u.toString().startsWith(HUB), { timeout: 120000 }), page.click('#kc-login')])
+    await Promise.all([page.waitForURL(onHub, { timeout: 120000 }), page.click('#kc-login')])
     await page.waitForTimeout(2000)
   }
 }
