@@ -57,6 +57,53 @@ public class ProviderSwitchHttpTests
         finally { await app.StopAsync(); }
     }
 
+    [PostgreSqlFact]
+    public async Task PendingReplacementRefusesNativeStateUploadBeforeStorageOrPodAccess()
+    {
+        await using var database = await PostgresSharingDatabase.CreateAsync(pooling: false);
+        await database.Sessions.UpsertAsync(new() { Id = "s", Owner = "alice", Agent = AgentKind.Claude,
+            AgentSessionId = "native", CallbackToken = "source", Status = "Failed", ProviderSwitchPending = true });
+        var workspace = new AgentHub.Api.Persistence.PostgresSessionWorkspaceStore(database.Configuration);
+        await workspace.InitializeAsync();
+        await workspace.AddAsync("alice", new("s", "workspace-s", null, "10Gi", null, "nonce", "[]"));
+        var journal = new AgentHub.Api.Persistence.PostgresProviderSwitchStore(database.Configuration, new PostgresExecutionFence(database.Configuration));
+        await journal.InitializeAsync();
+        await journal.CreateAsync("alice", new(Guid.NewGuid(), "s", 0, AgentKind.Claude, "source-pod", "claim",
+            new(AgentKind.Codex, AgentAuthMode.ApiKey, null, null, null), "Reviewed handover."));
+        var service = new KubernetesSessionService(database.Configuration, database.Sessions, null!, null!, null!, null!, null!, null!,
+            null!, null!, null!, null!, NullLogger<KubernetesSessionService>.Instance,
+            cluster: new Kubernetes(new KubernetesClientConfiguration { Host = "http://127.0.0.1:1" }),
+            runtimeUpdateLock: new PostgresSessionExpiryLock(database.Configuration));
+        var builder = WebApplication.CreateBuilder(); builder.Logging.ClearProviders();
+        builder.Services.AddAuthentication("proof").AddScheme<AuthenticationSchemeOptions, OwnerAuth>("proof", _ => { });
+        builder.Services.AddAuthorization();
+        await using var app = builder.Build(); app.Urls.Add("http://127.0.0.1:0");
+        app.UseAuthentication(); app.UseAuthorization();
+        app.MapPut("/state", async (Microsoft.AspNetCore.Http.HttpContext context) =>
+        {
+            try
+            {
+                await service.ReplaceStateArchiveAsync((context.User.FindFirstValue("preferred_username") ?? context.User.FindFirstValue(ClaimTypes.NameIdentifier))!, "s", context.Request.Body, context.Request.ContentLength);
+                return Microsoft.AspNetCore.Http.Results.Ok();
+            }
+            catch (InvalidOperationException error) { return Microsoft.AspNetCore.Http.Results.Conflict(error.Message); }
+            catch (KeyNotFoundException) { return Microsoft.AspNetCore.Http.Results.NotFound(); }
+        }).RequireAuthorization();
+        await app.StartAsync();
+        try
+        {
+            using var http = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+            http.DefaultRequestHeaders.Add("X-Proof-Owner", "alice");
+            var response = await http.PutAsync("/state", new ByteArrayContent([1, 2, 3]));
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Contains("Provider replacement is pending", await response.Content.ReadAsStringAsync());
+            Assert.Equal("native", (await database.Sessions.GetAsync("alice", "s"))!.AgentSessionId);
+            http.DefaultRequestHeaders.Remove("X-Proof-Owner"); http.DefaultRequestHeaders.Add("X-Proof-Owner", "bob");
+            Assert.Equal(HttpStatusCode.NotFound, (await http.PutAsync("/state", new ByteArrayContent([1]))).StatusCode);
+        }
+        finally { await app.StopAsync(); }
+    }
+
     private sealed class OwnerAuth(IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder)
         : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
     {

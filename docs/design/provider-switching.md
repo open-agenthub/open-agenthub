@@ -183,3 +183,8 @@ providers today. No real cross-provider pod transfer, auth transition, policy eq
 or end-to-end switching was executed in this documentation-only spike. Workspace checkpoint
 format and lifecycle-lock integration remain implementation design questions to resolve
 before that proof, not assumptions to hide behind a provider selector.
+
+Native state upload takes the session lifecycle lock and checks pending replacement again
+after acquiring it. A failed or paused-looking pod can still have a durable replacement in
+progress; accepting a local hand-back archive then would overwrite generation state. Checking
+only pod phase was rejected because it does not identify the active journal operation.

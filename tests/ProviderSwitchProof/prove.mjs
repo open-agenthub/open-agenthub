@@ -30,14 +30,22 @@ async function openTerminal(id,kind='terminal'){
    const timer=setTimeout(()=>reject(new Error('no upstream terminal output')),10000);
    // Backend upgrade precedes its pod connection; wait for actual upstream bytes.
    socket.once('message',()=>{clearTimeout(timer);resolve();});
-   socket.once('close',()=>{clearTimeout(timer);reject(new Error('upstream terminal closed'));});
+   socket.once('close',(code,reason)=>{clearTimeout(timer);reject(new Error('upstream terminal closed '+code+': '+reason));});
    socket.once('error',error=>{clearTimeout(timer);reject(error);});
-   socket.once('unexpected-response',(request,response)=>{clearTimeout(timer);response.resume();reject(new Error('terminal not ready'));});
+   socket.once('unexpected-response',(request,response)=>{clearTimeout(timer);response.resume();reject(new Error('terminal HTTP '+response.statusCode));});
   });}
-  catch{socket.terminate();term.dispose();return null;}
+  catch(error){socket.terminate();term.dispose();throw error;}
   socket.send(JSON.stringify({type:'resize',cols:120,rows:36}));
   return {socket,close(){socket.close();term.dispose();}};
  },'connect actual terminal',240);
+}
+async function openSourceShell(id){
+ const program=`const WebSocket=require('/opt/session-agent/node_modules/ws');const socket=new WebSocket('ws://127.0.0.1:7681/shell');socket.once('message',()=>process.stdout.write('shell-ready\\n'));socket.on('error',()=>process.exit(1));process.stdin.resume();process.stdin.on('end',()=>socket.close());socket.on('close',()=>process.exit(0));`;
+ const child=spawn('kubectl',['-n',ns,'exec','-i','session-'+id,'-c','agent','--','node','-e',program],{stdio:['pipe','pipe','pipe']});
+ let output='',error='';child.stdout.on('data',bytes=>output+=bytes);child.stderr.on('data',bytes=>error+=bytes);
+ try{await until(()=>{if(child.exitCode!==null)throw Object.assign(new Error('source loopback shell exited: '+error),{fatal:true});return output.includes('shell-ready');},'actual source loopback shell',120);}
+ catch(error){child.stdin.end();child.kill('SIGTERM');throw error;}
+ return {async close(){child.stdin.end();await until(()=>child.exitCode!==null,'source shell cleanup',40);}};
 }
 function apply(object){return execFileSync('kubectl',['apply','-f','-'],{input:JSON.stringify(object),encoding:'utf8',stdio:['pipe','pipe','pipe']});}
 let id,terminal,watcher,shell;
@@ -81,7 +89,7 @@ try{
   const fingerprint=()=>exec('cd /workspace; find first second -type f -exec sha256sum {} \\; | sort');
   const baseline=fingerprint();
   await until(()=>pod().status.containerStatuses?.some(container=>container.name==='agent'&&container.ready),'source ready before cancellation proof');
-  shell=await openTerminal(id,'shell');
+  shell=await openSourceShell(id);
   const cancelId=crypto.randomUUID();
   const cancelSelection={requestId:cancelId,target:{agent:'Codex',authMode,credentialId:authMode==='Subscription'?'default':null,modelEndpointUrl:null,modelName:null},
    handover:{target:'Codex',instructions:'Preserve policy.',task:'Cancellation must retain the source.'}};
@@ -93,7 +101,7 @@ try{
   await until(async()=>{const value=await api('sessions/'+id+'/provider-switch');return value.operation?.progress.phase==='cancelled';},'durable cancellation completes');
   assert.equal(pod().metadata.uid,first.metadata.uid);
   await until(()=>{const rows=JSON.parse(exec(`node -e 'fetch(${JSON.stringify(process.env.PROOF_MODEL_URL+'/proof/requests')}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))'`));return rows.some(row=>row.agent==='claude'&&row.authMode===authMode&&row.containsCancelled);},'model receives queued source message after cancellation');
-  shell.close();shell=null;
+  await shell.close();shell=null;
   console.log(authMode+': actual source shell refusal, cancellation and queued-message handback passed.');
   const watchEvents=[];let remainder='';
   watcher=spawn('kubectl',['-n',ns,'get','pods','-l','agenthub.dev/session='+id,'--watch','--output-watch-events','-o','jsonpath={.type}{"\\t"}{.object.metadata.uid}{"\\n"}'],{stdio:['ignore','pipe','ignore']});
@@ -177,7 +185,7 @@ try{
  if(id){try{console.error('Pod status:',JSON.stringify(json('-n',ns,'get','pod','session-'+id).status));}catch{}try{console.error(kubectl('-n',ns,'logs','session-'+id,'-c','agent','--tail=100'));}catch{}try{console.error('Operation:',JSON.stringify(await api('sessions/'+id+'/provider-switch')));}catch{}try{console.error('Model receipts:',kubectl('-n',ns,'exec','session-'+id,'-c','agent','--','node','-e',`fetch(${JSON.stringify(process.env.PROOF_MODEL_URL+'/proof/requests')}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))`));}catch{}}
  throw error;
 }finally{
- shell?.close();terminal?.close();watcher?.kill('SIGTERM');
+ await shell?.close();terminal?.close();watcher?.kill('SIGTERM');
  if(id){try{await api('sessions/'+id,'DELETE',undefined,204);}catch{console.error('Session cleanup held; inspect retained claim in the disposable cluster.');}}
  for(const name of proofSecrets){try{kubectl('-n',ns,'delete','secret',name);}catch{}}
 }

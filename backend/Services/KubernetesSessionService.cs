@@ -2619,6 +2619,12 @@ public sealed partial class KubernetesSessionService : ISessionService, IExecuti
     {
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
+        RefusePendingReplacement(rec);
+        await using var held = _runtimeUpdateLock is null ? null : await _runtimeUpdateLock.TryAcquireAsync(id, ct);
+        if (_runtimeUpdateLock is not null && held is null) throw new InvalidOperationException("Session maintenance is already in progress.");
+        // The phase and generation may change while waiting for another lifecycle operation.
+        rec = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException($"Session {id} not found.");
+        RefusePendingReplacement(rec);
         var pod = await TryReadPodAsync($"session-{id}", ct);
         var phase = SessionStatus.ResolvePhase(pod?.Status?.Phase, rec.Status);
         if (!SessionStatus.CanReplaceState(phase))

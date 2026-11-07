@@ -70,3 +70,9 @@ of the redirected model base. A print-mode probe can work without that cache whi
 interactive subscription startup waits for profile completion. The cache contains only the
 selected synthetic account metadata, never prior native conversation or source state. This
 fixture does not prove real profile fetching, OAuth sign-in, renewal or account entitlement.
+
+The busy-shell admission setup opens a real Bash shell through the source pod's loopback
+WebSocket using `kubectl exec`. It exercises the common server's actual shell tracking
+without making this proof depend on the separate legacy backend shell proxy. All switching
+requests and the main agent terminal still use the real backend. This does not verify the
+legacy shell proxy's reconnect behavior.
