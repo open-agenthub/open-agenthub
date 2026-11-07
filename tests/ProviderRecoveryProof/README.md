@@ -129,13 +129,38 @@ restart policy, pod-loss reconciliation or backend crash recovery.
 
 Dispatch the same workflow with `prove_provider_recovery=true` and
 `provider_recovery_scope=runtime`. This skips journal crash gates and runs the real native
-replacement path plus planned pause/resume, then kills the isolated agent's exact direct
-native PTY child. The same selector is first proved against both real local CLIs.
+replacement path plus planned pause/resume, then acknowledges a real native checkpoint and kills the exact session container task
+through the normal worker container runtime. This is a container/pod crash, including runtime
+PID 1, not a cluster native-child-only exit test. The local native-child selector/control
+remains a separate proof, including #537. The host denied the in-container kill attempt; no
+host confinement settings are changed to make it pass.
 
 The worker must observe the actual container terminate and session Failed. Its shipped
 Never restart policy must retain zero same-pod restarts during a further observation window.
 Only an explicit owner Resume may create another pod; assert the same native identity,
 strict archive requirement, empty startup prompt, same claim/dirty repositories, one visible
-handover and a new owner turn in the same generation. Run API-key and synthetic subscription
+handover and a new owner turn in the same generation. The recording model must also receive
+the checkpointed owner context after recovery. Only the acknowledged checkpoint is covered;
+uncheckpointed recent turns are not claimed durable. Run API-key and synthetic subscription
 Claude→Codex→Claude. This acceptance result remains pending until its worker dispatch passes.
 This does not model kernel OOM, node loss or a target dying before generation commitment.
+
+## Held operations and real storage/network failure
+
+Dispatch `prove_provider_recovery=true` with `provider_recovery_scope=held`. This uses
+actual API-key native sources in both directions. It removes/restores the selected target
+API key or subscription Secret after review and tests preview/start refusal before source
+stop. A changed recorded claim UID must also refuse without touching the source.
+
+The storage fault narrows the existing object-storage NetworkPolicy to a label carried only
+by the source pod. Source checkpoint/stop can finish; the fresh target has no storage egress.
+Require a real failed native checkpoint before commit and retain queued input. Restoring the
+policy and owner Retry must finish the same target; deleting that unconfirmed target must
+instead stay held without replay or another pod. A separate source-pod-loss case holds
+before source stop and checks generation, queue, acknowledged source archive and no target.
+Read-only inspector pods compare actual retained repository bytes after pod loss.
+
+These worker outcomes remain pending until the explicit dispatch succeeds. No production
+fault route, credential bypass or host policy change is introduced. The held source/target
+cases may need administrator preservation/deletion; no automatic rollback or migration is
+claimed. Generated output stays outside Git.

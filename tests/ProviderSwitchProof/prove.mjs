@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { killNativeChild } from '../ProviderRecoveryProof/native-child.mjs';
 const require = createRequire('/tmp/provider-switch-tools/package.json');
 const WebSocket = require('ws'), { Terminal } = require('@xterm/headless');
 const ns = 'agenthub-sessions', control = 'agenthub';
@@ -84,7 +83,7 @@ function seedSubscriptions(ownerKey){
   proofSecrets.push(name);
  }
 }
-if(process.env.PROOF_RECOVERY==='1'&&process.env.PROOF_RECOVERY_SCOPE!=='runtime'){
+if(process.env.PROOF_RECOVERY==='1'&&process.env.PROOF_RECOVERY_SCOPE==='journal'){
  const {createRecoveryFaults}=await import('../ProviderRecoveryProof/faults.mjs');
  recovery=createRecoveryFaults({api,json});
 }
@@ -92,7 +91,8 @@ try{
  await until(async()=>{await api('credentials');return true;},'backend ready');
  await api('credentials','PUT',{anthropicApiKey:'synthetic-claude-proof',openAiApiKey:'synthetic-codex-proof'},204);
  let ownerKey;
- for(const authMode of ['ApiKey','Subscription']){
+ if(process.env.PROOF_RECOVERY_SCOPE==='held'){const {proveHeldRecovery}=await import('../ProviderRecoveryProof/held.mjs');await proveHeldRecovery({api,json,kubectl,openTerminal,openSourceShell,until,seedSubscriptions,headers,backendUrl,ns,control});}
+ else for(const authMode of ['ApiKey','Subscription']){
   if(authMode==='Subscription')seedSubscriptions(ownerKey);
   const created=await api('sessions','POST',{title:'Native provider replacement '+authMode,agent:'Claude',authMode,mode:'Interactive',
    ...(authMode==='Subscription'?{credentialId:'default'}:{}),prompt:'SWITCH-PROOF-0',autoApprove:false,policy:{allowedTools:['Bash'],allowedCommands:['printf'],allowedMcpTools:[]},
@@ -227,8 +227,14 @@ try{
     if(process.env.PROOF_RECOVERY_SCOPE==='runtime'){
      await until(async()=>{const value=await api('sessions/'+id+'/conversation?offset=0&max=500');const at=value.entries.findIndex(entry=>entry.generation===generation&&entry.role==='user'&&entry.text.includes(followup));return at>=0&&value.entries.slice(at+1).some(entry=>entry.generation===generation&&entry.role==='assistant');},'owner turn finishes before native death');
      assert.equal(resumed.spec.restartPolicy,'Never');terminal.close();terminal=null;
-     const fault=`const fs=require("node:fs");const killNativeChild=${killNativeChild.toString()};killNativeChild(1,${JSON.stringify(target.toLowerCase())});`;
-     kubectl('-n',ns,'exec',podName,'-c','agent','--','node','-e',fault);
+     const checkpointId=crypto.randomUUID();
+     const checkpointProgram=`const requestId=${JSON.stringify(checkpointId)};fetch("http://127.0.0.1:7681/agenthub/provider-switch",{method:"POST",headers:{"X-Agent-Token":process.env.AGENTHUB_CALLBACK_TOKEN,"Content-Type":"application/json"},body:JSON.stringify({requestId,action:"prepare"})}).then(async response=>process.stdout.write(JSON.stringify({status:response.status,body:await response.json()})))`;
+     await until(()=>{const value=JSON.parse(kubectl('-n',ns,'exec',podName,'-c','agent','--','node','-e',checkpointProgram));return value.status===200&&value.body.checkpointed;},'acknowledged native checkpoint before abrupt container loss');
+     const cancelled=JSON.parse(kubectl('-n',ns,'exec',podName,'-c','agent','--','node','-e',`fetch("http://127.0.0.1:7681/agenthub/provider-switch",{method:"DELETE",headers:{"X-Agent-Token":process.env.AGENTHUB_CALLBACK_TOKEN,"Content-Type":"application/json"},body:JSON.stringify({requestId:${JSON.stringify(checkpointId)}})}).then(async response=>process.stdout.write(JSON.stringify({status:response.status,body:await response.json()})))`));
+     assert.equal(cancelled.status,200);
+     const containerId=pod().status.containerStatuses.find(item=>item.name==='agent').containerID.replace(/^containerd:\/\//,'');
+     assert(/^[0-9a-f]{64}$/.test(containerId),'fault only the recorded disposable session container');
+     execFileSync('sudo',['k3s','ctr','-n','k8s.io','tasks','kill','--signal','SIGKILL',containerId],{stdio:'pipe'});
      const failed=await until(async()=>{const value=pod(),agent=value.status.containerStatuses?.find(item=>item.name==='agent');return agent?.state?.terminated&&(await api('sessions/'+id)).phase==='Failed'&&value;},'real kubelet observes failed native container');
      assert.equal(failed.metadata.uid,resumed.metadata.uid);assert.equal(failed.status.containerStatuses.find(item=>item.name==='agent').restartCount,0);
      await sleep(5000);
@@ -250,8 +256,10 @@ try{
      terminal.socket.send(JSON.stringify({type:'input',data:afterCrash}));await sleep(200);terminal.socket.send(JSON.stringify({type:'input',data:'\r'}));
      const history=await until(async()=>{const value=await api('sessions/'+id+'/conversation?offset=0&max=500');return value.entries.some(entry=>entry.generation===generation&&entry.role==='user'&&entry.text.includes(afterCrash))&&value;},'new owner turn after explicit crash recovery');
      assert.equal(history.entries.filter(entry=>entry.generation===generation&&entry.role==='user'&&entry.text===review.text).length,1);
+     assert(history.entries.some(entry=>entry.generation===generation&&entry.role==='user'&&entry.text.includes(followup)));
+     await until(()=>{const receipts=JSON.parse(exec(`node -e 'fetch(${JSON.stringify(process.env.PROOF_MODEL_URL+'/proof/requests')}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))'`));return receipts.some(item=>item.agent===target.toLowerCase()&&item.authMode===authMode&&item.marker==='SWITCH-PROOF-'+generation&&item.containsAfterCrash&&item.containsResumed);},'post-crash model receives checkpointed owner context');
      assert.equal((await api('sessions/'+id)).executionGeneration,generation);
-     console.log(authMode+' generation '+generation+': actual native/container failure, Never policy/no same-pod restart, owner resume with same native identity/PVC/history and one handover passed.');
+     console.log(authMode+' generation '+generation+': actual container/pod crash via containerd task SIGKILL, Never policy/no same-pod restart, owner resume with same native identity/PVC/history and one handover passed.');
     }
 
    }
@@ -261,7 +269,7 @@ try{
   await api('sessions/'+id,'DELETE',undefined,204);id=null;
   await until(()=>{try{json('-n',ns,'get','pvc',claimName);return false;}catch{return true;}},'workspace cleanup');
  }
- console.log('PASS: real backend + Postgres + object storage + kubelet + pinned CLIs, API-key and synthetic subscription Claude→Codex→Claude, both native model lists without supplied context-window metadata.');
+ console.log(process.env.PROOF_RECOVERY_SCOPE==='held'?'PASS: held credential/claim/checkpoint/target-loss cases against real native runtimes and storage/network policy.':'PASS: real backend + Postgres + object storage + kubelet + pinned CLIs, API-key and synthetic subscription Claude→Codex→Claude, both native model lists without supplied context-window metadata.');
 }catch(error){
  console.error('Native provider proof failed:',error.message);
  recovery?.diagnostics();

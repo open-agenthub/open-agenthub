@@ -24,7 +24,7 @@ on:
       provider_recovery_scope:
         description: "Recovery proof: journal backend crashes or native runtime death/resume"
         type: choice
-        options: [journal, runtime]
+        options: [journal, runtime, held]
         default: journal
       prove_workspace_pvc:
         description: "Prove persistent session workspace mounts and pause/resume on real kubelet"
