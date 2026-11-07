@@ -396,6 +396,7 @@ chat:
 telemetry:
   enabled: true
   # Optional OTLP endpoint base override (the exporter appends "/v1/metrics").
+  # A custom collector receives no session credential and does not feed AgentHub usage.
   # Empty = the internal backend service (http://agenthub-backend.<ns>.svc.cluster.local/internal/otel).
   otlpEndpoint: ""
 

@@ -9,6 +9,44 @@ namespace AgentHub.Api.Tests;
 public class AgentPodSpecFactoryTests
 {
     [Theory]
+    [InlineData("https://collector.example.com", false)]
+    [InlineData("http://callback.example.com/internal/otel", false)]
+    [InlineData("http://callback/internal/otel", true)]
+    [InlineData("http://callback/internal/otel/", true)]
+    public void Telemetry_CustomEndpointReceivesCredentialOnlyWhenItIsTheHub(string endpoint, bool authenticated)
+    {
+        var context = Context();
+        var pod = AgentPodSpecFactory.Build(Record(AgentKind.Claude, AgentAuthMode.ApiKey, SessionMode.Interactive),
+            new CreateSessionRequest { Agent = AgentKind.Claude, AuthMode = AgentAuthMode.ApiKey },
+            context with { Runtime = context.Runtime with { TelemetryEnabled = true, TelemetryOtlpEndpoint = endpoint } });
+        var env = Assert.Single(pod.Containers).Env;
+        Assert.Equal(endpoint.TrimEnd('/'), env.Single(e => e.Name == "OTEL_EXPORTER_OTLP_ENDPOINT").Value);
+        Assert.Equal(authenticated, env.Any(e => e.Name == "OTEL_EXPORTER_OTLP_HEADERS"));
+    }
+
+    [Theory]
+    [InlineData(AgentKind.Claude)]
+    [InlineData(AgentKind.Codex)]
+    [InlineData(AgentKind.Cursor)]
+    [InlineData(AgentKind.OpenClaw)]
+    [InlineData(AgentKind.OpenCode)]
+    public void Telemetry_UsesSessionCredentialOnlyForConfiguredExporter(AgentKind agent)
+    {
+        var context = Context();
+        var record = Record(agent, AgentAuthMode.ApiKey, SessionMode.Interactive, OpenClawApiKeySource.Anthropic);
+        var pod = AgentPodSpecFactory.Build(record,
+            new CreateSessionRequest { Agent = agent, AuthMode = AgentAuthMode.ApiKey },
+            context with { Runtime = context.Runtime with { TelemetryEnabled = true } });
+        var env = Assert.Single(pod.Containers).Env;
+        Assert.Contains(env, e => e.Name == "AGENTHUB_CALLBACK_TOKEN" && e.Value == record.CallbackToken);
+        if (agent == AgentKind.Claude)
+            Assert.Contains(env, e => e.Name == "OTEL_EXPORTER_OTLP_HEADERS" &&
+                e.Value == $"X-Agent-Token={record.CallbackToken}");
+        else
+            Assert.DoesNotContain(env, e => e.Name.StartsWith("OTEL_EXPORTER_", StringComparison.Ordinal));
+    }
+
+    [Theory]
     [InlineData(AgentKind.Claude)]
     [InlineData(AgentKind.Codex)]
     [InlineData(AgentKind.Cursor)]
