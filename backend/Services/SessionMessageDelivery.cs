@@ -45,10 +45,12 @@ public sealed class SessionMessageDelivery : ISessionMessageDelivery
     private readonly ISessionMessageStore _messages;
     private readonly ILogger<SessionMessageDelivery> _log;
     private readonly int _agentPort;
+    private readonly IProviderSwitchStore? _providerSwitches;
 
     public SessionMessageDelivery(IAgentPodRequests pods, ISessionStore sessions, ISessionMessageStore messages,
-        IConfiguration configuration, ILogger<SessionMessageDelivery> log)
+        IConfiguration configuration, ILogger<SessionMessageDelivery> log, IProviderSwitchStore? providerSwitches = null)
     {
+        _providerSwitches = providerSwitches;
         _pods = pods;
         _sessions = sessions;
         _messages = messages;
@@ -56,8 +58,16 @@ public sealed class SessionMessageDelivery : ISessionMessageDelivery
         _agentPort = configuration.GetValue("AgentHub:AgentPort", 7681);
     }
 
-    public async Task<MessageDelivery> TryInjectAsync(SessionInfo target, SessionMessageRecord message,
-        string? fromTitle, CancellationToken ct)
+    public Task<MessageDelivery> TryInjectAsync(SessionInfo target, SessionMessageRecord message,
+        string? fromTitle, CancellationToken ct) => InjectAsync(target, message, fromTitle, false, ct);
+
+    // Only the backend's durable release/cancellation phase may bypass the pending guard.
+    // Normal senders keep storing messages until the handback has been acknowledged.
+    public Task<MessageDelivery> TryInjectReleasedAsync(SessionInfo target, SessionMessageRecord message,
+        string? fromTitle, CancellationToken ct) => InjectAsync(target, message, fromTitle, true, ct);
+
+    private async Task<MessageDelivery> InjectAsync(SessionInfo target, SessionMessageRecord message,
+        string? fromTitle, bool released, CancellationToken ct)
     {
         if (target.Phase != "Running" || string.IsNullOrEmpty(target.PodIp))
             return new MessageDelivery(MessageDeliveryVia.Inbox, "session_not_running");
@@ -65,7 +75,9 @@ public sealed class SessionMessageDelivery : ISessionMessageDelivery
         // The callback token lives on the record, not on the public SessionInfo the callers hold.
         var record = await _sessions.GetByIdAsync(target.Id, ct);
         if (record is null) return new MessageDelivery(MessageDeliveryVia.Inbox, "session_not_found");
-        if (record.ProviderSwitchPending) return new MessageDelivery(MessageDeliveryVia.Inbox, "provider_switch_pending");
+        if (record.ProviderSwitchPending && (!released || _providerSwitches is null ||
+            !await _providerSwitches.CanConsumeInboxAsync(record.Owner, record.Id, record.ExecutionGeneration, ct)))
+            return new MessageDelivery(MessageDeliveryVia.Inbox, "provider_switch_pending");
 
         var uri = new UriBuilder("http", target.PodIp, _agentPort, "agenthub/messages").Uri;
         PodDeliveryResponse? answer;

@@ -228,3 +228,16 @@ without moving old usage into a new account. Finish that separate FK-backed chec
 locking the registry row in the admission transaction; otherwise its second connection can
 wait for the caller's own registry lock. Refresh the same cutoff on a held admission retry.
 The owner panel labels this completed usage separately from the still-active run's aggregate.
+
+## Returning queued input after cancellation
+
+Cancellation records `cancelling` before waking the still-identical source generation. Keep
+maintenance pending until runtime cancellation and queued-message handback are acknowledged.
+Codex uses its native turn-hook inbox; Claude uses ordinary acknowledged mod delivery from
+a non-destructive pending-message snapshot. Only these durable release/cancellation phases
+can use that dispatch bypass; ordinary senders continue to queue while replacement is pending.
+
+Rejected: clearing pending before waking the source (a crash can leave an untracked reservation),
+and waking before opening the source-generation inbox gate (an idle source can miss the only
+wake-up). A batch bound keeps large queues from holding one worker pass indefinitely; the
+next pass continues the same durable phase without replaying a handover.

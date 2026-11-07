@@ -101,8 +101,13 @@ public class ProviderSwitchJournalTests
         Assert.True((await database.Sessions.GetAsync("alice", "s"))!.ProviderSwitchPending);
         await journal.MoveAsync("alice", "s", request.RequestId, "requested", new("requested"));
         Assert.Single(await journal.PendingAsync());
-        await Assert.ThrowsAsync<InvalidOperationException>(() => journal.MoveAsync("bob", "s", request.RequestId, "requested", new("cancelled")));
-        await journal.MoveAsync("alice", "s", request.RequestId, "requested", new("cancelled"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => journal.MoveAsync("bob", "s", request.RequestId, "requested", new("cancelling")));
+        await journal.MoveAsync("alice", "s", request.RequestId, "requested", new("cancelling"));
+        Assert.True((await database.Sessions.GetAsync("alice", "s"))!.ProviderSwitchPending);
+        Assert.True(await journal.CanConsumeInboxAsync("alice", "s", 0));
+        Assert.False(await journal.CanConsumeInboxAsync("alice", "s", 1));
+        Assert.False(await journal.CanConsumeInboxAsync("bob", "s", 0));
+        await journal.MoveAsync("alice", "s", request.RequestId, "cancelling", new("cancelled"));
         var source = (await database.Sessions.GetAsync("alice", "s"))!;
         Assert.False(source.ProviderSwitchPending);
         Assert.Equal(0, source.ExecutionGeneration);

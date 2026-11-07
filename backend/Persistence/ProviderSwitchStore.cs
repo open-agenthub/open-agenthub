@@ -103,7 +103,8 @@ public sealed class PostgresProviderSwitchStore(IConfiguration configuration, IE
         await using var command = _db.CreateCommand("""
             SELECT EXISTS(SELECT 1 FROM session_provider_switches p JOIN sessions s ON s.id=p.session_id
                 WHERE s.id=@id AND s.owner=@owner AND s.execution_generation=@generation
-                AND p.phase='releasing' AND (p.request->>'sourceGeneration')::bigint+1=@generation)
+                AND ((p.phase='releasing' AND (p.request->>'sourceGeneration')::bigint+1=@generation)
+                    OR (p.phase='cancelling' AND (p.request->>'sourceGeneration')::bigint=@generation)))
             """);
         command.Parameters.AddWithValue("owner", owner); command.Parameters.AddWithValue("id", id);
         command.Parameters.AddWithValue("generation", generation);
@@ -113,7 +114,7 @@ public sealed class PostgresProviderSwitchStore(IConfiguration configuration, IE
     public async Task MoveAsync(string owner, string id, Guid requestId, string expectedPhase, ProviderSwitchProgress progress, CancellationToken ct = default)
     {
         var allowed = expectedPhase == progress.Phase || (expectedPhase, progress.Phase) is
-            ("requested", "prepared") or ("requested", "cancelled") or ("prepared", "cancelled")
+            ("requested", "prepared") or ("requested", "cancelling") or ("prepared", "cancelling") or ("cancelling", "cancelled")
             or ("prepared", "stopping") or ("stopping", "source-stopped") or ("target-admitted", "target-starting") or ("target-starting", "target-started")
             or ("target-started", "committing") or ("committing", "releasing") or ("releasing", "completed");
         if (!allowed || (progress.Phase == "source-stopped" && !progress.SourceStopAcknowledged) || (progress.Phase == "committing" && !Guid.TryParse(progress.TargetNativeId, out _)))

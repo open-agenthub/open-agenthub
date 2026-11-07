@@ -17,6 +17,7 @@ const WebSocket = require('ws');
 const { Terminal } = require('@xterm/headless');
 const requests = [];
 const archives = [];
+let queuedAfterCancel = [];
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn) { for (let n = 0; n < 600; n++) { if (child && child.exitCode !== null) throw new Error('session server exited: ' + child.exitCode); try { const value = await fn(); if (value) return value; } catch {} await sleep(200); } throw new Error('capture timeout'); }
@@ -56,6 +57,7 @@ const hub = http.createServer(async (req, res) => {
   const chunks = []; for await (const chunk of req) chunks.push(chunk);
   if (req.url.startsWith('/state/')) archives.push({ route: req.url, bytes: Buffer.concat(chunks) });
   res.setHeader('content-type', 'application/json');
+  if(req.url.includes('/messages')){const messages=queuedAfterCancel;queuedAfterCancel=[];return res.end(JSON.stringify({messages}));}
   res.end(req.url.endsWith('/agent-policy') ? '{"decision":"allow"}' : req.url.includes('/messages') ? '{"messages":[]}' : '{}');
 });
 await listen(model); await listen(hub);
@@ -93,6 +95,14 @@ try {
       fs.writeFileSync(path.join(home, '.codex/auth.json'), JSON.stringify({ OPENAI_API_KEY: apiKey }));
       delete env.CODEX_API_KEY;
 
+    }
+    if(agent==='claude'&&process.env.PROOF_CLAUDE_MOD==='1'){
+      const mod=path.join(root,'fleet-mod');
+      fs.cpSync(path.join(repo,'agent-runtime/claude/mods/agenthub-fleet'),mod,{recursive:true,filter:file=>!file.includes('node_modules')});
+      const register=path.join(mod,'hooks/register.js');
+      fs.writeFileSync(register,fs.readFileSync(register,'utf8').replaceAll('127.0.0.1:7681','127.0.0.1:18674'));
+      env.CLAUDE_CODE_PLUGIN_DIRS=mod;env.AGENTHUB_MOD_TOKEN='synthetic-native-mod';
+      delete env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC;
     }
     if (process.env.PROOF_SOURCE_PREPARE === '1' && agent === 'claude') {
       const settings = execFileSync('bash', [path.join(repo, 'agent-runtime/claude/hooks/mcp-policy-hook.sh'), '--settings'],
@@ -158,8 +168,16 @@ try {
           return response.ok && await response.json();
         });
         assert(prepared.checkpointed && prepared.draining);
+        if(agent==='codex')queuedAfterCancel=[{id:'cancel-queued',body:'CANCEL-QUEUED-native-codex',priority:true,fromTitle:'Proof'}];
         const cancelled = await fetch(route, { method: 'DELETE', headers: authority, body: JSON.stringify({ requestId: nextRequest }) });
         assert.equal(cancelled.status, 200);
+        if(agent==='codex')await until(async()=> (await transcript()).includes('CANCEL-QUEUED-native-codex'));
+        if(agent==='claude'&&process.env.PROOF_CLAUDE_MOD==='1'){
+          const pushed=await fetch('http://127.0.0.1:18674/agenthub/messages',{method:'POST',headers:authority,body:JSON.stringify({id:'cancel-mod',body:'CANCEL-QUEUED-native-claude',priority:true,fromTitle:'Proof'})});
+          assert.equal(pushed.status,200);
+          assert.equal((await pushed.json()).delivered,'queued-for-mod');
+          await until(async()=> (await transcript()).includes('CANCEL-QUEUED-native-claude'));
+        }
         const stopRequest = '33333333-3333-4333-8333-333333333333';
         await until(async () => (await fetch(route, { method: 'POST', headers: authority, body: JSON.stringify({ requestId: stopRequest, action: 'prepare' }) })).ok);
         const stopped = await fetch(route, { method: 'POST', headers: authority, body: JSON.stringify({ requestId: stopRequest, action: 'stop' }) });

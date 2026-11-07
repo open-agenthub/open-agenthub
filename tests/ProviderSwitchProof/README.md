@@ -51,3 +51,9 @@ Fresh homes may contain `.claude/skills`: the common skill library intentionally
 shared root and links `.agents/skills` to it even for Codex. Fresh-native-state assertions
 therefore reject opposite-provider credential/history paths and a unique marker placed in
 each source native state directory, rather than treating the shared skill root as a resume.
+
+`PROOF_KUBECTL=/absolute/path/to/kubectl node tests/ProviderSwitchProof/watch-format.mjs`
+checks the actual client formatter against a small discovery/list/watch fixture. Kubectl's
+tab writer expands JSONPath tabs into spaces; consumers must split whitespace, and establish
+the watch by observing the source before starting replacement. This formatter check is not
+a kubelet/deletion-order proof; the workflow verifies actual source/target lifecycle.

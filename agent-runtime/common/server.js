@@ -2323,8 +2323,10 @@ function createCommonServer(options = {}) {
     let body; try { body = raw && JSON.parse(raw.toString('utf8')); } catch {}
     if (!body || !/^[0-9a-f-]{36}$/i.test(body.requestId || '')) return fileError(response, 400, 'invalid_switch_request');
     if (request.method === 'DELETE') {
-      if (providerStopping || (providerTargetRequest && !providerTargetReleased) || providerSourceRequest !== body.requestId) return fileError(response, 409, 'switch_not_cancellable');
-      providerSourceRequest = null; runtimeDraining = false; nextTurn?.suspend(false); publishActivity();
+      if (providerStopping || (providerTargetRequest && !providerTargetReleased) ||
+          (providerSourceRequest && providerSourceRequest !== body.requestId) || (runtimeDraining && !providerSourceRequest))
+        return fileError(response, 409, 'switch_not_cancellable');
+      providerSourceRequest = null; runtimeDraining = false; nextTurn?.suspend(false); nextTurn?.accept(); publishActivity();
       return sendJson(response, 200, { cancelled: true });
     }
     if (body.action === 'stop') {

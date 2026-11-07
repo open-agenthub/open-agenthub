@@ -109,3 +109,31 @@ test('native source quit is submitted once and failed final usage acknowledgment
   assert.equal(terminal.writes.filter(value => value === '/exit').length, 1);
   assert.equal(terminal.killed, false);
 });
+
+test('cancelling a reserved source wakes an idle source inbox', async () => {
+  let clock = 10_000;
+  const file = '/home/agent/.test-agent/source.jsonl';
+  const h = createHarness({ ...env, AGENTHUB_CALLBACK_URL: 'https://example.com/session' },
+    { supportsProviderSwitch: true, turnHooks: true, findTranscript: () => file, nativeIdentity: () => 'source-native' },
+    { files: { [file]: '{"type":"user","message":{"role":"user","content":"source"}}\n' }, now: () => clock,
+      fetchResponse: () => ({ ok: true, json: async () => ({ messages: [] }), text: async () => '' }) });
+  const socket = new FakeSocket(); h.runtime.webSocketServer.connect(socket, '/');
+  socket.emit('message', JSON.stringify({ type: 'resize', cols: 120, rows: 36 }));
+  clock = 11_000;
+  await requestHttp(h, 'POST', '/agenthub/turn', headers, JSON.stringify({ event: 'prompt' }), '127.0.0.1');
+  clock = 14_000;
+  await requestHttp(h, 'POST', '/agenthub/turn', headers, JSON.stringify({ event: 'stop' }), '127.0.0.1');
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal((await route(h, 'prepare')).status, 200);
+  h.requests.length = 0;
+  assert.equal((await requestHttp(h, 'DELETE', '/agenthub/provider-switch', headers, JSON.stringify({ requestId }))).status, 200);
+  h.intervals.find(interval => interval.ms === 1000).callback();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert(h.requests.some(request => request.url.includes('/messages?via=next_turn')));
+});
+
+test('source cancellation is idempotent even before reservation reaches the runtime', async () => {
+  const h = createHarness(env, { supportsProviderSwitch: true, turnHooks: true });
+  for (let attempt = 0; attempt < 2; attempt++)
+    assert.equal((await requestHttp(h, 'DELETE', '/agenthub/provider-switch', headers, JSON.stringify({ requestId }))).status, 200);
+});

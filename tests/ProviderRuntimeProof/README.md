@@ -51,3 +51,9 @@ through the production traversal before its final digest. It requires a real coa
 collision, compares the same metadata snapshots with/without mode, and asserts production
 signatures distinguish different permission modes. The script refuses to claim reproduction
 when the filesystem does not exhibit a collision within its bounded attempts.
+
+With `PROOF_SOURCE_PREPARE=1`, cancellation also verifies a queued message becomes native
+Codex input without a subsequent human turn. Add `PROOF_CLAUDE_MOD=1` to load a private copy
+of the shipped Claude mod against the local transport and verify acknowledged mod handback.
+The copy redirects only loopback ports. Nonessential-traffic suppression must be unset for
+that native mod, whose loopback HTTP uses the CLI's networking API.

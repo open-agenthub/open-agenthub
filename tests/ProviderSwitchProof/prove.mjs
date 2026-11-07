@@ -20,10 +20,10 @@ async function api(route,method='GET',body,expected=200){
  assert.equal(response.status,expected,method+' '+route+': '+await response.clone().text());
  const text=await response.text();return text?JSON.parse(text):null;
 }
-async function openTerminal(id){
+async function openTerminal(id,kind='terminal'){
  return until(async()=>{
   const term=new Terminal({cols:120,rows:36,allowProposedApi:true});
-  const socket=new WebSocket('ws://127.0.0.1:18880/ws/sessions/'+id+'/terminal',{headers:{Authorization:'Bearer '+key}});
+  const socket=new WebSocket('ws://127.0.0.1:18880/ws/sessions/'+id+'/'+kind,{headers:{Authorization:'Bearer '+key}});
   socket.on('message',data=>term.write(data.toString()));
   term.onData(data=>{if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'input',data}));});
   try{await new Promise((resolve,reject)=>{
@@ -40,7 +40,7 @@ async function openTerminal(id){
  },'connect actual terminal',240);
 }
 function apply(object){return execFileSync('kubectl',['apply','-f','-'],{input:JSON.stringify(object),encoding:'utf8',stdio:['pipe','pipe','pipe']});}
-let id,terminal,watcher;
+let id,terminal,watcher,shell;
 const proofSecrets=[];
 function seedSubscriptions(ownerKey){
  const future=Date.now()+86400000;
@@ -80,9 +80,25 @@ try{
   exec("for name in first second; do printf 'dirty retained content\\n' >> /workspace/$name/tracked.txt; printf 'untracked retained content\\n' > /workspace/$name/untracked.txt; git -C /workspace/$name config proof.retained yes; done");
   const fingerprint=()=>exec('cd /workspace; find first second -type f -exec sha256sum {} \\; | sort');
   const baseline=fingerprint();
+  await until(()=>pod().status.containerStatuses?.some(container=>container.name==='agent'&&container.ready),'source ready before cancellation proof');
+  shell=await openTerminal(id,'shell');
+  const cancelId=crypto.randomUUID();
+  const cancelSelection={requestId:cancelId,target:{agent:'Codex',authMode,credentialId:authMode==='Subscription'?'default':null,modelEndpointUrl:null,modelName:null},
+   handover:{target:'Codex',instructions:'Preserve policy.',task:'Cancellation must retain the source.'}};
+  const cancelReview=await api('sessions/'+id+'/provider-switch/preview','POST',cancelSelection);
+  await api('sessions/'+id+'/provider-switch','POST',{...cancelSelection,reviewHash:cancelReview.reviewHash});
+  await api('sessions/'+id+'/messages','POST',{body:'CANCEL-QUEUED-'+authMode,priority:true});
+  await until(async()=>{const value=await api('sessions/'+id+'/provider-switch');return value.operation?.progress.phase==='requested'&&value.operation.progress.error;},'known open shell refuses source preparation');
+  await api('sessions/'+id+'/provider-switch/cancel','POST',{requestId:cancelId});
+  await until(async()=>{const value=await api('sessions/'+id+'/provider-switch');return value.operation?.progress.phase==='cancelled';},'durable cancellation completes');
+  assert.equal(pod().metadata.uid,first.metadata.uid);
+  await until(async()=>{const page=await api('sessions/'+id+'/conversation?offset=0&max=500');return page.entries?.some(entry=>entry.text.includes('CANCEL-QUEUED-'+authMode));},'queued source message after cancellation');
+  shell.close();shell=null;
+  console.log(authMode+': actual source shell refusal, cancellation and queued-message handback passed.');
   const watchEvents=[];let remainder='';
   watcher=spawn('kubectl',['-n',ns,'get','pods','-l','agenthub.dev/session='+id,'--watch','--output-watch-events','-o','jsonpath={.type}{"\\t"}{.object.metadata.uid}{"\\n"}'],{stdio:['ignore','pipe','ignore']});
-  watcher.stdout.on('data',chunk=>{remainder+=chunk;const lines=remainder.split('\n');remainder=lines.pop();for(const line of lines){const [type,uid]=line.split('\t');watchEvents.push({type,uid});}});
+  watcher.stdout.on('data',chunk=>{remainder+=chunk;const lines=remainder.split('\n');remainder=lines.pop();for(const line of lines){const [type,uid]=line.trim().split(/\s+/);watchEvents.push({type,uid});}});
+  await until(()=>watchEvents.some(event=>event.type==='ADDED'&&event.uid===first.metadata.uid),'Kubernetes watch observes source before replacement');
   for(const [generation,target] of [[1,'Codex'],[2,'Claude']]){
    const source=await until(()=>{const value=pod();return value.status.phase==='Running'&&value.status.containerStatuses?.some(container=>container.name==='agent'&&container.ready)&&value;},'source kubelet readiness');
    const sourceToken=source.spec.containers.find(container=>container.name==='agent').env.find(item=>item.name==='AGENTHUB_CALLBACK_TOKEN').value;
@@ -161,7 +177,7 @@ try{
  if(id){try{console.error('Pod status:',JSON.stringify(json('-n',ns,'get','pod','session-'+id).status));}catch{}try{console.error(kubectl('-n',ns,'logs','session-'+id,'-c','agent','--tail=100'));}catch{}try{console.error('Operation:',JSON.stringify(await api('sessions/'+id+'/provider-switch')));}catch{}}
  throw error;
 }finally{
- terminal?.close();watcher?.kill('SIGTERM');
+ shell?.close();terminal?.close();watcher?.kill('SIGTERM');
  if(id){try{await api('sessions/'+id,'DELETE',undefined,204);}catch{console.error('Session cleanup held; inspect retained claim in the disposable cluster.');}}
  for(const name of proofSecrets){try{kubectl('-n',ns,'delete','secret',name);}catch{}}
 }

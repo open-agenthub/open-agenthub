@@ -25,6 +25,8 @@ namespace AgentHub.Api.Services;
 /// </summary>
 public sealed partial class KubernetesSessionService : ISessionService, IExecutionConversationSource, IProviderLoginRepository, IGitSessionCredentials
 {
+    private readonly ISessionMessageStore? _switchMessages;
+    private readonly SessionMessageDelivery? _switchDelivery;
     private readonly IExecutionUsageSnapshots? _executionUsage;
     private readonly IProviderSwitchStore? _providerSwitches;
     private readonly IModelCatalogStore? _switchCatalogs;
@@ -82,8 +84,9 @@ public sealed partial class KubernetesSessionService : ISessionService, IExecuti
         IAgentPodRequests? podRequests = null,
         Chat.IChatSessionCleanup? chatCleanup = null, ISessionExecutionStore? executions = null, ISessionWorkspaceStore? workspaceStore = null,
         IProviderSwitchStore? providerSwitches = null, IModelCatalogStore? switchCatalogs = null,
-        AgentHub.Api.Permissions.PermissionStore? switchPermissions = null, IExecutionUsageSnapshots? executionUsage = null)
+        AgentHub.Api.Permissions.PermissionStore? switchPermissions = null, IExecutionUsageSnapshots? executionUsage = null, ISessionMessageStore? switchMessages = null, SessionMessageDelivery? switchDelivery = null)
     {
+        _switchMessages = switchMessages; _switchDelivery = switchDelivery;
         _executionUsage = executionUsage;
         _providerSwitches = providerSwitches; _switchCatalogs = switchCatalogs; _switchPermissions = switchPermissions;
         _executions = executions;

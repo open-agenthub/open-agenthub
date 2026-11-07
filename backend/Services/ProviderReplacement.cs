@@ -39,7 +39,7 @@ public sealed partial class KubernetesSessionService
     {
         var record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
         var reason = Unavailable(record, _opts.WorkspaceVolumePersistent)
-            ?? (_workspaceVolumes is null || _providerSwitches is null || _executions is null || !_artifacts.IsConfigured || _runtimeUpdateLock is null || _podRequests is null
+            ?? (_workspaceVolumes is null || _providerSwitches is null || _executions is null || !_artifacts.IsConfigured || _runtimeUpdateLock is null || _podRequests is null || _switchMessages is null || _switchDelivery is null
                 ? "Switching requires configured state storage and lifecycle services." : null);
         return new(reason is null, reason ?? "Available at a completed-turn safe point after review.",
             _providerSwitches is null ? null : await _providerSwitches.GetAsync(owner, id, ct),
@@ -50,7 +50,7 @@ public sealed partial class KubernetesSessionService
     {
         var record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
         if (Unavailable(record, _opts.WorkspaceVolumePersistent) is { } reason) throw new ProviderReplacementRefusedException(reason);
-        if (_workspaceVolumes is null || _providerSwitches is null || _executions is null || _runtimeUpdateLock is null || _podRequests is null || !_artifacts.IsConfigured)
+        if (_workspaceVolumes is null || _providerSwitches is null || _executions is null || _runtimeUpdateLock is null || _podRequests is null || _switchMessages is null || _switchDelivery is null || !_artifacts.IsConfigured)
             throw new ProviderReplacementRefusedException("Provider switching requires configured state storage and lifecycle services.");
         if (selection.RequestId == Guid.Empty || selection.Target.Agent == record.Agent || selection.Handover.Target != selection.Target.Agent)
             throw new ArgumentException("Choose the other supported provider and a replacement request ID.");
@@ -163,16 +163,30 @@ public sealed partial class KubernetesSessionService
     {
         await using var held = await SwitchLockAsync(id, ct);
         var operation = await _providerSwitches!.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
-        if (operation.Request.RequestId != requestId || operation.Progress.Phase is not ("requested" or "prepared"))
+        if (operation.Request.RequestId != requestId || operation.Progress.Phase is not ("requested" or "prepared" or "cancelling" or "cancelled"))
             throw new ProviderReplacementRefusedException("Source stop has begun; cancellation would be ambiguous. Retry this replacement or delete the session.");
+        if (operation.Progress.Phase == "cancelled") return;
         var record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
-        var pod = await RequireSourcePodAsync(record, operation.Request.SourcePodUid, ct);
-        // Preparation may have reached the runtime even when its response was lost.
-        var state = await RuntimeSwitchAsync(record, pod, HttpMethod.Get, null, ct);
-        if (state.RequestId == requestId.ToString("D"))
-            await RuntimeSwitchAsync(record, pod, HttpMethod.Delete, new { requestId }, ct);
-        else if (state.Draining) throw new ProviderReplacementRefusedException("The source is reserved by another operation.");
-        await _providerSwitches.MoveAsync(owner, id, requestId, operation.Progress.Phase, operation.Progress with { Phase = "cancelled", Error = null }, ct);
+        await RequireSourcePodAsync(record, operation.Request.SourcePodUid, ct);
+        var progress = operation.Progress;
+        if (progress.Phase != "cancelling")
+        {
+            progress = progress with { Phase = "cancelling", Error = null };
+            await _providerSwitches.MoveAsync(owner, id, requestId, operation.Progress.Phase, progress, ct);
+        }
+        await FinishProviderCancellationAsync(record, operation.Request, progress, ct);
+    }
+
+    private async Task FinishProviderCancellationAsync(SessionRecord record, ProviderSwitchRequest request, ProviderSwitchProgress progress, CancellationToken ct)
+    {
+        if (record.ExecutionGeneration != request.SourceGeneration)
+            throw new ProviderReplacementRefusedException("The cancellation source generation changed.");
+        var pod = await RequireSourcePodAsync(record, request.SourcePodUid, ct);
+        // Open the durable source-generation inbox gate before waking it, and retain the
+        // maintenance fence until the idempotent runtime cancellation is acknowledged.
+        await RuntimeSwitchAsync(record, pod, HttpMethod.Delete, new { requestId = request.RequestId }, ct);
+        if (!await DeliverReleasedProviderInboxAsync(record, pod, ct)) return;
+        await _providerSwitches!.MoveAsync(record.Owner, record.Id, request.RequestId, "cancelling", progress with { Phase = "cancelled", Error = null }, ct);
     }
 
     public async Task ProcessProviderSwitchAsync(string owner, string id, CancellationToken ct)
@@ -187,6 +201,11 @@ public sealed partial class KubernetesSessionService
         try
         {
             var record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
+            if (progress.Phase == "cancelling")
+            {
+                await FinishProviderCancellationAsync(record, request, progress, ct);
+                return;
+            }
             var workspace = await _workspaceVolumes!.EnsureAsync(record, ct) ?? throw new ProviderReplacementRefusedException("Workspace is unavailable.");
             if (workspace.ClaimUid != request.ClaimUid) throw new ProviderReplacementRefusedException("Workspace identity changed.");
             if (progress.Phase == "requested")
@@ -305,6 +324,7 @@ public sealed partial class KubernetesSessionService
                 var released = await RuntimeSwitchAsync(record, target, HttpMethod.Post,
                     new { requestId = request.RequestId, action = "release", nativeId = progress.TargetNativeId }, ct);
                 if (!released.Checkpointed || released.Draining) throw new ProviderReplacementRefusedException("Target release was not acknowledged.");
+                if (!await DeliverReleasedProviderInboxAsync(record, target, ct)) return;
                 await _providerSwitches.MoveAsync(owner, id, request.RequestId, "releasing", progress with { Phase = "completed", Error = null }, ct);
             }
         }
@@ -320,6 +340,23 @@ public sealed partial class KubernetesSessionService
                 : "Replacement is held. Inspect session startup status and retry the same request; uncertain target input is never replayed.";
             await _providerSwitches.MoveAsync(owner, id, request.RequestId, progress.Phase, progress with { Error = safeReason }, ct);
         }
+    }
+
+    private async Task<bool> DeliverReleasedProviderInboxAsync(SessionRecord record, V1Pod pod, CancellationToken ct)
+    {
+        // Codex takes its inbox through native turn hooks. Claude uses its mod instead,
+        // so messages held during replacement need the ordinary acknowledged push path.
+        if (record.Agent != AgentKind.Claude) return true;
+        if (_switchMessages is null || _switchDelivery is null)
+            throw new ProviderReplacementRefusedException("Message delivery services are unavailable; replacement release is held.");
+        var pending = await _switchMessages.ReadUndeliveredAsync(record.Id, AgentMessaging.InboxBatchLimit, ct);
+        foreach (var message in pending)
+        {
+            var delivered = await _switchDelivery.TryInjectReleasedAsync(ToInfo(record, "Running", pod.Status.PodIP), message, message.FromTitle, ct);
+            if (delivered.Via == MessageDeliveryVia.Inbox)
+                throw new ProviderReplacementRefusedException("Queued message delivery is not confirmed. Retry the same operation after the runtime is ready.");
+        }
+        return pending.Count < AgentMessaging.InboxBatchLimit;
     }
 
     private async Task RefuseReplacementHelpersAsync(SessionRecord record, CancellationToken ct)

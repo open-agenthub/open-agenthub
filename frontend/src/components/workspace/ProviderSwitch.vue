@@ -21,7 +21,7 @@ const active = computed(() => operation.value && !['completed', 'cancelled'].inc
 const choices = computed(() => accounts.value[target.value] || [])
 const models = computed(() => catalog.value?.catalog?.models || [])
 const phaseLabel = computed(() => ({ requested: 'Waiting for a safe point', prepared: 'Source saved',
-  stopping: 'Stopping the source', 'source-stopped': 'Starting the new provider', 'target-admitted': 'Starting the new provider',
+  cancelling: 'Confirming cancellation', stopping: 'Stopping the source', 'source-stopped': 'Starting the new provider', 'target-admitted': 'Starting the new provider',
   'target-starting': 'Starting the new provider', 'target-started': 'Confirming the handover', committing: 'Finishing the replacement', releasing: 'Activating the new provider' })[operation.value?.progress.phase] || 'Replacement pending')
 const reviewedAccount = computed(() => choices.value.find(account => account.id === review.value?.target.credentialId)?.label
   || review.value?.target.credentialId || (review.value?.target.authMode === 'ApiKey' ? 'Stored API key' : 'Custom endpoint'))
@@ -111,6 +111,7 @@ onBeforeUnmount(() => { disposed = true; catalogGeneration++; clearInterval(time
         <p v-if="operation.progress.error" role="alert">{{ operation.progress.error }}</p>
         <button v-if="operation.progress.error" type="button" class="bar-btn" :disabled="busy" @click="act('retryProviderSwitch')">Retry this replacement</button>
         <button v-if="canCancel" type="button" class="bar-btn" :disabled="busy" @click="act('cancelProviderSwitch')">Cancel before source stop</button>
+        <p v-else-if="operation.progress.phase === 'cancelling'">Cancellation is being confirmed. Input waits until it completes.</p>
         <p v-else>Source stop has begun. Automatic rollback and handover replay are unavailable.</p>
       </template>
       <template v-else-if="status?.available">
