@@ -995,6 +995,7 @@ function createCommonServer(options = {}) {
   }
 
   let exitCallbacks = null;
+  let shuttingDown = false;
   function beforeExit(done) {
     if (exitCallbacks) return void exitCallbacks.push(done);
     exitCallbacks = [done];
@@ -1184,6 +1185,7 @@ function createCommonServer(options = {}) {
   }
 
   function handleAgentExit(exitCode, signal) {
+    if (shuttingDown) return;
     if (providerStopping) {
       exited = true; providerNativeStopped = true;
       for (const resolve of providerExitWaiters) resolve();
@@ -1202,8 +1204,11 @@ function createCommonServer(options = {}) {
       return;
     }
 
+    // PTY termination can report code zero alongside a fatal signal. Treating only
+    // the code as authoritative would publish a killed target as successful.
+    if (signal && !exitCode) exitCode = Number.isInteger(signal) ? 128 + signal : 1;
     const elapsedMs = now() - launchedAt;
-    if (!nativeResumeRequired && !providerTargetRequest && attemptedResume && !retriedFresh &&
+    if (!signal && !nativeResumeRequired && !providerTargetRequest && attemptedResume && !retriedFresh &&
         driver.isMissingResume(attemptOutput, exitCode, elapsedMs)) {
       retriedFresh = true;
       remember(retryMessage());
@@ -1219,6 +1224,7 @@ function createCommonServer(options = {}) {
       try { socket.close(1000); } catch {}
     }
     beforeExit(() => {
+      if (shuttingDown) return;
       const report = () => postStatus(exitCode === 0 ? 'Succeeded' : 'Failed', () =>
         setTimeoutImpl(() => processLike.exit(exitCode || 0), mode === 'interactive' ? 1500 : 200));
       if (exitCode === 0) return report();
@@ -2823,6 +2829,7 @@ function createCommonServer(options = {}) {
 
   for (const signal of ['SIGTERM', 'SIGINT']) {
     processLike.on(signal, () => {
+      shuttingDown = true;
       beforeExit(() => {
         try { term.kill(); } catch {}
         processLike.exit(0);
