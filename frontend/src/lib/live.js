@@ -6,6 +6,8 @@
 //
 // The backoff matches the browser pane's (BrowserPane.vue): a reconnect storm against a backend
 // that is rolling over is worse than a pane that takes a few seconds to come back.
+import { limitHandshake } from './handshake.js'
+
 const BASE_BACKOFF_MS = 750
 const MAX_BACKOFF_MS = 10_000
 
@@ -47,6 +49,8 @@ export function openSessionEvents(resolveUrl, onEvent, onConnectedChange = () =>
       retry()
       return
     }
+    // A held handshake here stalls the page's terminal sockets too (lib/handshake.js).
+    limitHandshake(socket)
 
     socket.onopen = () => {
       attempt = 0
