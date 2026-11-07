@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const usage = require('../common/usage');
+const { escapeRegExp } = require('../common/model-switch');
 
 // Since 0.160 the TUI turns its mouse capture off again but stays on the alternate screen with
 // alternate-scroll set, so the web terminal turns the wheel into arrow keys: Codex reads those as
@@ -67,13 +68,23 @@ function resumeTarget(env) {
   return rememberedThreadId(env, fs) || '--last';
 }
 
+// A resumed thread answers on the model recorded in it, not on config.toml's `model`: verified on
+// 0.167.0, where `resume <id>` with a changed config still sent every turn to the old model and
+// `resume <id> --model <id>` moved it, with the thread intact (docs/design/live-model-switch.md).
+// Without the flag a model chosen in the edit dialog or the Workspace picker would apply to a
+// fresh start only, and a restart would quietly undo a live switch.
+function resumeModelArgs(env) {
+  const model = String(env.AGENTHUB_MODEL_NAME || '').trim();
+  return model ? ['--model', model] : [];
+}
+
 function buildCommand(env, allowResume) {
   const mode = (env.AGENTHUB_MODE || 'interactive').toLowerCase();
   const restoredResume = allowResume && env.AGENTHUB_RESUME === '1' &&
     env.AGENTHUB_STATE_RESTORED === '1';
   if (mode === 'interactive') {
     const args = [...TUI_FLAGS];
-    if (restoredResume) args.push('resume', resumeTarget(env));
+    if (restoredResume) args.push('resume', resumeTarget(env), ...resumeModelArgs(env));
     // `codex [OPTIONS] [PROMPT]` — the CLI's own help calls the positional the "optional user
     // prompt to start the session", and it keeps the TUI, so an API-created session is already
     // working when a person opens it. Left out on a resume: `resume` is a subcommand there and a
@@ -87,7 +98,7 @@ function buildCommand(env, allowResume) {
   }
 
   const args = ['exec', ...EXEC_FLAGS];
-  if (restoredResume) args.push('resume', resumeTarget(env));
+  if (restoredResume) args.push('resume', resumeTarget(env), ...resumeModelArgs(env));
   args.push(env.AGENTHUB_PROMPT || '');
   return { cmd: 'codex', args };
 }
@@ -104,16 +115,19 @@ function isResumeCommand(command) {
   }
   if (command.cmd !== 'codex') return false;
   if (args[0] !== 'exec') return isTuiResume(args);
-  return args.length === 8 && args[0] === 'exec' && args[1] === '--sandbox' &&
+  const withModel = args[7] === '--model' && typeof args[8] === 'string' && args[8].length > 0;
+  return args.length === (withModel ? 10 : 8) && args[0] === 'exec' && args[1] === '--sandbox' &&
     args[2] === 'danger-full-access' && args[3] === '--json' &&
     args[4] === '--dangerously-bypass-hook-trust' && args[5] === 'resume' &&
     isResumeArgument(args[6]);
 }
 
 function isTuiResume(args) {
-  return args.length === TUI_FLAGS.length + 2 &&
+  const at = TUI_FLAGS.length;
+  const withModel = args[at + 2] === '--model' && typeof args[at + 3] === 'string' && args[at + 3].length > 0;
+  return args.length === at + (withModel ? 4 : 2) &&
     TUI_FLAGS.every((flag, index) => args[index] === flag) &&
-    args[TUI_FLAGS.length] === 'resume' && isResumeArgument(args[TUI_FLAGS.length + 1]);
+    args[at] === 'resume' && isResumeArgument(args[at + 1]);
 }
 
 function isMissingResume(output, exitCode) {
@@ -247,6 +261,15 @@ module.exports = {
     rows.filter(row => /^\s*›/.test(row)).length === 1 &&
     rows.some(row => /^\s*›\s+Ask Codex to do anything\s*$/.test(row)),
   slashCommands: require('./slash-commands'),
+  // Verified on 0.167.0 (docs/design/live-model-switch.md): `/model <slug>` switches the running
+  // thread and keeps it, "for this session only" — a restart resumes on AGENTHUB_MODEL_NAME, which
+  // the hub updates once this confirms. A slug outside the CLI's own list is refused, which is
+  // what a custom endpoint's ids are; the hub applies those on a restart instead.
+  modelSwitch: {
+    command: model => '/model ' + model,
+    confirm: model => new RegExp('Model changed to ' + escapeRegExp(model) + '(?:\\s|$)'),
+    refused: /Model '[^']*' is unavailable/
+  },
   name: 'Codex', stateDir: '.codex', authFilename: 'auth.json',
   limitPatterns,
   // The TUI log only grows and the tmp dirs are per-process scratch; neither is needed to

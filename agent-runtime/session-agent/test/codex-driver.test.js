@@ -318,3 +318,19 @@ test('Codex clear confirmation rejects an old conversation or a menu with the co
   assert.equal(driver.contextClearScreen(['› Ask Codex to do anything']), false);
   assert.equal(driver.contextClearScreen(['  >_ Codex', '› /model']), false);
 });
+
+test('a resumed Codex thread is moved to the session\'s model, and the command still reads as a resume', () => {
+  // 0.167.0 answers a resumed thread on the model recorded in it, whatever config.toml says;
+  // only --model moves it (docs/design/live-model-switch.md).
+  const env = { AGENTHUB_MODE: 'interactive', AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1',
+    AGENTHUB_MODEL_NAME: 'gpt-6-luna', CODEX_HOME: '/nonexistent' };
+  const tui = driver.buildCommand({ ...env }, true);
+  assert.deepEqual(tui.args.slice(-4), ['resume', '--last', '--model', 'gpt-6-luna']);
+  assert.equal(driver.isResumeCommand(tui), true);
+  const exec = driver.buildCommand({ ...env, AGENTHUB_MODE: 'autonomous', AGENTHUB_PROMPT: 'report' }, true);
+  assert.deepEqual(exec.args.slice(-5), ['resume', '--last', '--model', 'gpt-6-luna', 'report']);
+  assert.equal(driver.isResumeCommand(exec), true);
+  // A fresh start takes the model from config.toml, as before.
+  assert.equal(driver.buildCommand({ ...env, AGENTHUB_RESUME: '0' }, true).args.includes('--model'), false);
+  assert.equal(driver.isResumeCommand({ cmd: 'codex', args: [...tui.args.slice(0, -1)] }), false);
+});
