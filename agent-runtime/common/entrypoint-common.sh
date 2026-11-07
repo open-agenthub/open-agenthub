@@ -15,6 +15,10 @@ if [ -d /opt/agenthub/session-agent ]; then
 fi
 export RUNTIME
 export AGENTHUB_FILES_MCP_ENABLED=1
+# Built-ins are added after the mounted configuration; apply the same startup policy
+# before any runtime-specific configurator can add them again.
+MCP_STARTUP_FLAGS="$(node "$RUNTIME/common/mcp-startup-policy.js")"
+eval "$MCP_STARTUP_FLAGS"
 # The local skills proxy in front of the hub's skill-library server, so uploads and
 # downloads can name a path instead of quoting file content into the agent's context.
 # It only takes over an entry the hub actually injected; set to 0 to keep the plain

@@ -53,8 +53,8 @@ public class McpPolicyTests
         => Assert.Equal(expected, McpPolicyMatcher.NormalizeMcpName(AgentKind.Claude, name));
 
     [Fact]
-    public void NormalizeMcpName_LeavesOtherRuntimesVerbatimUntilTheirRuleIsVerified()
-        => Assert.Equal("mcp__docs__get-data.v2", McpPolicyMatcher.NormalizeMcpName(AgentKind.Codex, "mcp__docs__get-data.v2"));
+    public void NormalizeMcpName_CodexUsesTheUnderscoreAlphabet()
+        => Assert.Equal("mcp__docs__get_data_v2", McpPolicyMatcher.NormalizeMcpName(AgentKind.Codex, "mcp__docs__get-data.v2"));
 
     // ReadMcpResourceTool and its siblings name the server in an argument; the decision is the
     // server-level block, and a call without a server would list every server's resources.
@@ -82,5 +82,30 @@ public class McpPolicyTests
         Assert.True(McpPolicyMatcher.IsResourceTool(AgentKind.Claude, "ReadMcpResourceTool"));
         Assert.False(McpPolicyMatcher.IsResourceTool(AgentKind.Claude, "read_mcp_resource"));
         Assert.False(McpPolicyMatcher.IsResourceTool(AgentKind.Codex, "ReadMcpResourceTool"));
+    }
+    [Theory]
+    [InlineData(AgentKind.Codex, "mcp__probe_srv__get_data_v2", "mcp__probe_srv__allowed")]
+    [InlineData(AgentKind.OpenCode, "mcp__probe-srv__get-data_v2", "mcp__probe-srv__allowed")]
+    public void RuntimeNames_UseTheSamePolicyNamespace(AgentKind agent, string blockedTool, string allowedTool)
+    {
+        Assert.True(McpPolicyMatcher.IsBlocked(agent, blockedTool, [], ["mcp__probe-srv__get-data.v2"]));
+        Assert.True(McpPolicyMatcher.IsBlocked(agent, allowedTool, ["probe-srv"], []));
+        Assert.False(McpPolicyMatcher.IsBlocked(agent, allowedTool, [], ["mcp__probe-srv__get-data.v2"]));
+        var name = McpPolicyMatcher.NormalizeMcpName(agent, "mcp__probe-srv__get-data.v2");
+        Assert.Equal(name, McpPolicyMatcher.NormalizeMcpName(agent, name));
+    }
+
+    [Theory]
+    [InlineData(AgentKind.Codex)]
+    [InlineData(AgentKind.OpenCode)]
+    public void RuntimeResourceOperations_ApplyServerPolicy(AgentKind agent)
+    {
+        var policy = new SessionMcpPolicy(["probe-srv"], [], DateTime.UtcNow);
+        foreach (var tool in new[] { "read_mcp_resource", "list_mcp_resources", "list_mcp_resource_templates" })
+        {
+            Assert.True(McpPolicyMatcher.IsBlocked(agent, tool, "probe-srv", policy));
+            Assert.True(McpPolicyMatcher.IsBlocked(agent, tool, null, policy));
+            Assert.False(McpPolicyMatcher.IsBlocked(agent, tool, "allowed", policy));
+        }
     }
 }

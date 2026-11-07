@@ -488,11 +488,14 @@ public sealed class InternalController : ControllerBase
         var rec = await AuthAsync(id, ct);
         if (rec is null) return Unauthorized();
 
-        if ((body.Tool ?? string.Empty).StartsWith("mcp__", StringComparison.Ordinal))
+        if ((body.Tool ?? string.Empty).StartsWith("mcp__", StringComparison.Ordinal)
+            || McpPolicyMatcher.IsResourceTool(rec.Agent, body.Tool ?? string.Empty))
         {
             var sharing = await _shares.GetMcpPolicyAsync(id, ct);
-            if (sharing is not null && McpPolicyMatcher.IsBlocked(rec.Agent,
-                    body.Tool ?? string.Empty, sharing.BlockedServers, sharing.BlockedTools))
+            var server = body.Input.ValueKind == JsonValueKind.Object
+                && body.Input.TryGetProperty("server", out var argument)
+                && argument.ValueKind == JsonValueKind.String ? argument.GetString() : null;
+            if (McpPolicyMatcher.IsBlocked(rec.Agent, body.Tool ?? string.Empty, server, sharing))
                 return Ok(new { decision = "deny", reason = "Blocked by the session MCP sharing policy." });
         }
 
