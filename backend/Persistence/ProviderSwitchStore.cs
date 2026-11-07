@@ -25,7 +25,8 @@ public interface IProviderSwitchStore
     Task AdmitTargetAsync(string owner, string id, Guid requestId, CancellationToken ct = default);
 }
 
-public sealed class PostgresProviderSwitchStore(IConfiguration configuration, IExecutionFence fence) : IProviderSwitchStore
+public sealed class PostgresProviderSwitchStore(IConfiguration configuration, IExecutionFence fence, IExecutionUsageSnapshots? usageSnapshots = null,
+    AgentHub.Api.Permissions.PermissionStore? permissions = null) : IProviderSwitchStore
 {
     private readonly NpgsqlDataSource _db = PostgresDataSources.Shared(configuration);
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
@@ -125,6 +126,15 @@ public sealed class PostgresProviderSwitchStore(IConfiguration configuration, IE
         // Final source callbacks and credential pushes must finish before authority is rotated.
         // The worker holds the lifecycle lock and has already observed source pod disappearance.
         await using var authority = await fence.WriteAsync(id, ct);
+        if (usageSnapshots is not null)
+        {
+            var checkpoint = await GetAsync(owner, id, ct);
+            if (checkpoint?.Request.RequestId != requestId || checkpoint.Progress.Phase != "source-stopped")
+                throw new InvalidOperationException("Replacement is not ready for target admission.");
+            // Finish this FK-backed snapshot before locking the registry row below: a second
+            // connection inserting its session reference would otherwise wait on our own lock.
+            await usageSnapshots.CaptureAsync(owner, id, checkpoint.Request.SourceGeneration, ct);
+        }
         await using var connection = await _db.OpenConnectionAsync(ct);
         await using var transaction = await connection.BeginTransactionAsync(ct);
         ProviderSwitchRequest request;
@@ -141,6 +151,8 @@ public sealed class PostgresProviderSwitchStore(IConfiguration configuration, IE
             request = JsonSerializer.Deserialize<ProviderSwitchRequest>(reader.GetString(0), Json)!;
             progress = JsonSerializer.Deserialize<ProviderSwitchProgress>(reader.GetString(1), Json)!;
         }
+        if (permissions is not null && (await permissions.GetPendingRequestsAsync(id, ct)).Count > 0)
+            throw new InvalidOperationException("Source approvals are still pending; resolve them before target admission.");
         await using (var update = new NpgsqlCommand("""
             UPDATE sessions SET agent=@agent,auth_mode=@auth,credential_id=@credential,resolved_credential_id=@credential,
                 model_endpoint_url=@endpoint,model_name=@model,agent_session_id=@native,callback_token=@token,

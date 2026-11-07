@@ -135,6 +135,14 @@ onBeforeUnmount(() => { disposed = true; catalogGeneration++; clearInterval(time
         </div>
       </template>
       <p v-else>{{ status?.reason || 'Checking switching availability…' }}</p>
+      <details v-if="status?.completedUsage?.length">
+        <summary>Completed provider usage</summary>
+        <p>Reported totals for completed provider runs; the current run continues in the session's usage totals.</p>
+        <div class="usage-table"><table><thead><tr><th>Run</th><th>Provider</th><th>Account / billing</th><th>Input tokens</th><th>Output tokens</th></tr></thead>
+          <tbody><tr v-for="item in status.completedUsage" :key="item.generation"><td>{{ item.generation + 1 }}</td><td>{{ item.agent }}</td>
+            <td>{{ (accounts[item.agent] || []).find(account => account.id === item.credentialId)?.label || item.credentialId || item.billing }}</td>
+            <td>{{ item.inputTokens.toLocaleString() }}</td><td>{{ item.outputTokens.toLocaleString() }}</td></tr></tbody></table></div>
+      </details>
       <button type="button" class="bar-btn" @click="open = false">Close</button>
     </section>
   </div>
@@ -147,4 +155,6 @@ input, select, textarea { box-sizing: border-box; width: 100%; color: var(--text
 textarea { min-height: 70px; resize: vertical; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--border); padding: 12px; font: inherit; }
 p { overflow-wrap: anywhere; }
+.usage-table { max-width: 100%; overflow-x: auto; }
+th, td { padding: 8px; text-align: left; }
 </style>

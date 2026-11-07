@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 const repo = path.resolve(import.meta.dirname, '../..');
 const out = process.env.PROOF_OUT;
@@ -64,7 +64,7 @@ let child;
 try {
   for (const agent of ['claude', 'codex']) {
     const root = path.join(out, agent); const home = path.join(root, 'home'); const work = path.join(root, 'work');
-    for (const dir of [work, path.join(home, '.claude'), path.join(home, '.codex')]) fs.mkdirSync(dir, { recursive: true });
+    for (const dir of [work, path.join(home, '.claude'), path.join(home, '.codex'), path.join(root, 'tmp')]) fs.mkdirSync(dir, { recursive: true });
     const apiKey = 'synthetic-history-key';
     fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, autoUpdates: false,
       customApiKeyResponses: { approved: [apiKey.slice(-20)], rejected: [] }, projects: { [work]: { hasTrustDialogAccepted: true } } }));
@@ -75,11 +75,12 @@ try {
       `[projects."${work}"]`, 'trust_level = "trusted"', ''
     ].join('\n'));
     // Each provider gets an isolated home and only its own synthetic credential.
-    const env = { PATH: bins + ':' + process.env.PATH, HOME: home, TMPDIR: '/tmp', TERM: 'xterm-256color', LANG: 'C.UTF-8',
+    const env = { PATH: bins + ':' + process.env.PATH, HOME: home, TMPDIR: path.join(root, 'tmp'), TERM: 'xterm-256color', LANG: 'C.UTF-8',
       NODE_PATH: '/opt/session-agent/node_modules', AGENTHUB_DRIVER: path.join(repo, `agent-runtime/${agent}/driver.js`),
       AGENTHUB_SESSION_ID: 'history', AGENTHUB_MODE: 'interactive', AGENTHUB_WORKDIR: work, AGENTHUB_PORT: '18674',
       AGENTHUB_CALLBACK_URL: `http://127.0.0.1:${hub.address().port}/internal/sessions/history`,
       AGENTHUB_CALLBACK_TOKEN: 'synthetic-history-callback', AGENTHUB_SKILLS_SYNC_SECONDS: '0',
+      AGENTHUB_AUTH_WATCHER_PIDFILE: path.join(root, 'tmp', 'absent-watcher.pid'),
       AGENTHUB_MODEL_DISCOVERY: '0', AGENTHUB_PROVIDER_SWITCH_ID: '11111111-1111-4111-8111-111111111111',
       AGENTHUB_STATE_PUT_URL: `http://127.0.0.1:${hub.address().port}/state/${agent}`, AGENTHUB_PROMPT: `HISTORY-${agent}-0` };
     if (agent === 'claude') Object.assign(env, { ANTHROPIC_API_KEY: apiKey, ANTHROPIC_BASE_URL: modelUrl,
@@ -93,8 +94,34 @@ try {
       delete env.CODEX_API_KEY;
 
     }
+    if (process.env.PROOF_SOURCE_PREPARE === '1' && agent === 'claude') {
+      const settings = execFileSync('bash', [path.join(repo, 'agent-runtime/claude/hooks/mcp-policy-hook.sh'), '--settings'],
+        { env: { ...env, RUNTIME: path.join(repo, 'agent-runtime'), AGENTHUB_RUNTIME: path.join(repo, 'agent-runtime/claude/hooks'), AGENTHUB_NODE_BIN: process.execPath } });
+      fs.writeFileSync(path.join(home, '.claude/settings.json'), settings);
+    }
+    let command = process.execPath, args = [path.join(repo, 'agent-runtime/session-agent/server.js')];
+    if (process.env.PROOF_SOURCE_PREPARE === '1' && agent === 'codex') {
+      assert(process.env.PROOF_PROOT && path.isAbsolute(process.env.PROOF_PROOT), 'managed source proof requires PROOF_PROOT');
+      const runtime = path.join(root, 'runtime'), managed = path.join(root, 'managed');
+      fs.mkdirSync(runtime, { recursive: true }); fs.mkdirSync(managed, { recursive: true });
+      for (const name of ['common', 'codex', 'files', 'browser']) fs.cpSync(path.join(repo, 'agent-runtime', name), path.join(runtime, name), { recursive: true });
+      for (const name of ['server.js', 'package.json']) fs.copyFileSync(path.join(repo, 'agent-runtime/session-agent', name), path.join(runtime, name));
+      fs.cpSync('/opt/session-agent/node_modules', path.join(runtime, 'node_modules'), { recursive: true });
+      fs.copyFileSync(path.join(repo, 'agent-runtime/codex/requirements.toml'), path.join(managed, 'requirements.toml'));
+      const inside = '/proof/codex';
+      const config = path.join(home, '.codex/config.toml');
+      fs.writeFileSync(config, fs.readFileSync(config, 'utf8').split(work).join(inside + '/work'));
+      fs.mkdirSync(path.join(root, 'tmp', 'agenthub-private'), { recursive: true });
+      Object.assign(env, { HOME: inside + '/home', CODEX_HOME: inside + '/home/.codex', TMPDIR: '/tmp/agenthub-private',
+        AGENTHUB_WORKDIR: inside + '/work', AGENTHUB_DRIVER: '/opt/session-agent/codex/driver.js',
+        AGENTHUB_AUTH_WATCHER_PIDFILE: '/tmp/absent-watcher.pid', PATH: '/opt/proof-clis/node_modules/.bin:' + process.env.PATH });
+      command = process.env.PROOF_PROOT;
+      args = ['-b', runtime + ':/opt/session-agent', '-b', managed + ':/etc/codex', '-b', out + ':/proof',
+        '-b', path.resolve(bins, '../..') + ':/opt/proof-clis', '-b', path.join(root, 'tmp') + ':/tmp',
+        '-w', inside + '/work', process.execPath, '/opt/session-agent/server.js'];
+    }
     const log = fs.openSync(path.join(root, 'server.log'), 'a');
-    child = spawn(process.execPath, [path.join(repo, 'agent-runtime/session-agent/server.js')], { env, cwd: work, stdio: ['ignore', log, log] });
+    child = spawn(command, args, { env, cwd: work, detached: true, stdio: ['ignore', log, log] });
     const transcript = async () => {
       const response = await fetch('http://127.0.0.1:18674/agenthub/transcript?from=0', { headers: { 'X-Agent-Token': env.AGENTHUB_CALLBACK_TOKEN } });
       assert(response.ok); return response.text();
@@ -105,6 +132,7 @@ try {
     socket.on('message', data => term.write(data.toString()));
     term.onData(data => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'input', data })); });
     await new Promise((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
+    socket.send(JSON.stringify({ type: 'resize', cols: 120, rows: 36 }));
     try {
       await until(async () => (await transcript()).includes(`Answer HISTORY-${agent}-0`));
       const authority = { 'X-Agent-Token': env.AGENTHUB_CALLBACK_TOKEN, 'Content-Type': 'application/json' };
@@ -123,6 +151,17 @@ try {
       assert.equal((await release.json()).draining, false);
       assert(archives.some(item => item.route === '/state/' + agent && item.bytes.length > 0));
       fs.writeFileSync(path.join(root, 'state.tgz'), archives.filter(item => item.route === '/state/' + agent).at(-1).bytes);
+      if (process.env.PROOF_SOURCE_PREPARE === '1') {
+        const nextRequest = '22222222-2222-4222-8222-222222222222';
+        const prepared = await until(async () => {
+          const response = await fetch(route, { method: 'POST', headers: authority, body: JSON.stringify({ requestId: nextRequest, action: 'prepare' }) });
+          return response.ok && await response.json();
+        });
+        assert(prepared.checkpointed && prepared.draining);
+        const cancelled = await fetch(route, { method: 'DELETE', headers: authority, body: JSON.stringify({ requestId: nextRequest }) });
+        assert.equal(cancelled.status, 200);
+        console.log(agent + ': actual native prompt/Stop hooks, completed safe-point reservation, final archive and cancellation passed');
+      }
       const text = await transcript();
       fs.writeFileSync(path.join(out, agent + '.jsonl'), text);
       socket.close();
@@ -134,8 +173,8 @@ try {
       fs.writeFileSync(path.join(root, 'terminal.txt'), Array.from({ length: term.rows }, (_, n) =>
         term.buffer.active.getLine(term.buffer.active.viewportY + n)?.translateToString(true) ?? '').join('\n'));
       socket.close(); term.dispose();
-      child.kill('SIGTERM'); await new Promise(resolve => child.once('exit', resolve)); child = null;
+      process.kill(-child.pid, 'SIGTERM'); await new Promise(resolve => child.once('exit', resolve)); child = null;
     }
   }
   fs.writeFileSync(path.join(out, 'model-requests.json'), JSON.stringify(requests, null, 2));
-} finally { child?.kill('SIGTERM'); model.close(); hub.close(); }
+} finally { if (child) { try { process.kill(-child.pid, 'SIGTERM'); } catch {} } model.close(); hub.close(); }

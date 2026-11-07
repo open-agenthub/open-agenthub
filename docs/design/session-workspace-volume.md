@@ -210,3 +210,11 @@ under the previous signature. The maintained `ProviderRuntimeProof/signature-mod
 negative control observes the same production metadata snapshots, demonstrates the old
 collision and verifies the mode-sensitive digest. Depending on ctime alone was rejected
 because a changed archive entry could otherwise be mistaken for unchanged state.
+
+Completed execution usage is captured while source callback authority is exclusively fenced,
+before the target changes provider/account metadata. Store cumulative cutoffs and derive
+adjacent differences for owner readback. This preserves legacy source totals and return runs
+without moving old usage into a new account. Finish that separate FK-backed checkpoint before
+locking the registry row in the admission transaction; otherwise its second connection can
+wait for the caller's own registry lock. Refresh the same cutoff on a held admission retry.
+The owner panel labels this completed usage separately from the still-active run's aggregate.

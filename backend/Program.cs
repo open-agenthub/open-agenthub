@@ -48,6 +48,7 @@ builder.Services.AddSingleton<ISessionService, KubernetesSessionService>();
 builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileRegistry, AgentHub.Api.Files.PostgresSessionFileRegistry>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<IExecutionFence, PostgresExecutionFence>();
+builder.Services.AddSingleton<AgentHub.Api.Persistence.IExecutionUsageSnapshots, AgentHub.Api.Persistence.PostgresExecutionUsageSnapshots>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IProviderSwitchStore, AgentHub.Api.Persistence.PostgresProviderSwitchStore>();
 builder.Services.AddHostedService<ProviderReplacementWorker>();
 builder.Services.AddSingleton<AgentHub.Api.Files.IAgentCallbackAuthorizer, AgentHub.Api.Files.AgentCallbackAuthorizer>();
@@ -590,6 +591,7 @@ await AgentHub.Api.Persistence.SchemaMigrationLock.RunAsync(app.Configuration, a
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.PostgresSessionTransferTicketStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IWebhookTriggerStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IUsageStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IExecutionUsageSnapshots>().InitializeAsync();
         // Thread deletion archives into the shared tombstone schema, so it must exist first.
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Chat.ChatBindingStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Slack.SlackThreadStore>().InitializeAsync();

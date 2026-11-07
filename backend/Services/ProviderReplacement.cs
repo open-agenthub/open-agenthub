@@ -17,7 +17,7 @@ public sealed record ProviderSwitchSelection(Guid RequestId, ProviderSwitchTarge
     HandoverPreviewRequest Handover, string? ReviewHash = null);
 public sealed record ProviderSwitchReview(string Text, string ReviewHash, ProviderSwitchTarget Target,
     HandoverCapacity Capacity, string Policy);
-public sealed record ProviderSwitchAvailability(bool Available, string Reason, ProviderSwitchOperation? Operation);
+public sealed record ProviderSwitchAvailability(bool Available, string Reason, ProviderSwitchOperation? Operation, IReadOnlyList<ExecutionUsageSnapshot>? CompletedUsage = null);
 
 public sealed partial class KubernetesSessionService
 {
@@ -42,7 +42,8 @@ public sealed partial class KubernetesSessionService
             ?? (_workspaceVolumes is null || _providerSwitches is null || _executions is null || !_artifacts.IsConfigured || _runtimeUpdateLock is null || _podRequests is null
                 ? "Switching requires configured state storage and lifecycle services." : null);
         return new(reason is null, reason ?? "Available at a completed-turn safe point after review.",
-            _providerSwitches is null ? null : await _providerSwitches.GetAsync(owner, id, ct));
+            _providerSwitches is null ? null : await _providerSwitches.GetAsync(owner, id, ct),
+            _executionUsage is null ? null : await _executionUsage.ReadAsync(owner, id, ct));
     }
 
     public async Task<ProviderSwitchReview> ReviewProviderSwitchAsync(string owner, string id, ProviderSwitchSelection selection, CancellationToken ct)

@@ -20,8 +20,12 @@ public class ProviderSwitchJournalTests
         var workspace = new PostgresSessionWorkspaceStore(database.Configuration);
         await workspace.InitializeAsync();
         await workspace.AddAsync("alice", new("s", "workspace-s", null, "10Gi", null, "nonce", "[]"));
+        var usage = new PostgresUsageStore(database.Configuration);
+        await usage.InitializeAsync();
+        var snapshots = new PostgresExecutionUsageSnapshots(database.Configuration);
+        await snapshots.InitializeAsync();
         var fence = new PostgresExecutionFence(database.Configuration);
-        var journal = new PostgresProviderSwitchStore(database.Configuration, fence);
+        var journal = new PostgresProviderSwitchStore(database.Configuration, fence, snapshots);
         await journal.InitializeAsync();
         var request = Request();
         await Assert.ThrowsAsync<InvalidOperationException>(() => journal.CreateAsync("bob", request));
@@ -32,7 +36,7 @@ public class ProviderSwitchJournalTests
         }));
         Assert.Single(attempts, success => success);
         Assert.Null(await journal.GetAsync("bob", "s"));
-        var reopened = new PostgresProviderSwitchStore(database.Configuration, fence);
+        var reopened = new PostgresProviderSwitchStore(database.Configuration, fence, snapshots);
         Assert.Equal(request, (await reopened.GetAsync("alice", "s"))!.Request);
         Assert.True((await database.Sessions.GetAsync("alice", "s"))!.ProviderSwitchPending);
         await Assert.ThrowsAsync<InvalidOperationException>(() => reopened.AdmitTargetAsync("alice", "s", request.RequestId));
@@ -48,6 +52,7 @@ public class ProviderSwitchJournalTests
         }
         var target = (await database.Sessions.GetAsync("alice", "s"))!;
         Assert.Equal(1, target.ExecutionGeneration);
+        Assert.Single(await snapshots.ReadAsync("alice", "s"));
         Assert.Equal(AgentKind.Codex, target.Agent);
         Assert.Equal(AgentAuthMode.Subscription, target.AuthMode);
         Assert.Equal("target-account", target.CredentialId);

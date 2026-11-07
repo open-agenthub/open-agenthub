@@ -32,3 +32,20 @@ archive storage are stand-ins; both CLIs and the session transport are real.
 Run the runtime suite with `TMPDIR=/tmp` and `umask 022`: existing fixtures assert paths under
 `/tmp` and a chmod from a normally created file to mode 0600. A session-wide restrictive 0077
 mask makes that chmod a no-op and causes an unrelated archive-signature assertion to fail.
+
+For a positive source safe-point proof, also set `PROOF_SOURCE_PREPARE=1` and point
+`PROOF_PROOT` at the scratch static binary used by the fleet-delivery real-CLI rig. The
+script installs the actual Claude settings hooks. For Codex it copies this branch's runtime
+and requirements into scratch space and runs the whole session server inside proot, with
+private `/tmp` and image-owned managed hooks. It binds the isolated proof home/workspace and
+pinned CLI installation separately so the private `/tmp` cannot hide them. No native turn
+events are injected: real UserPromptSubmit/Stop hooks establish the completed safe point.
+After target release, each CLI reserves a subsequent source request, checkpoints its archive,
+and cancels that source reservation. Shell/background and concurrent guards have separate
+runtime regressions; no real provider account is used.
+
+`node tests/ProviderRuntimeProof/signature-mode.mjs` exercises actual filesystem metadata
+through the production traversal before its final digest. It requires a real coarse-ctime
+collision, compares the same metadata snapshots with/without mode, and asserts production
+signatures distinguish different permission modes. The script refuses to claim reproduction
+when the filesystem does not exhibit a collision within its bounded attempts.
