@@ -9,7 +9,9 @@ The transport exports completed native messages to the existing append-only JSON
 path. Message IDs determine ordering, with native part IDs determining order within a message.
 A page contains at most 100 messages. An incomplete assistant message stops export at that
 position so later messages cannot overtake it. Text, tool input and tool output are bounded;
-omissions are visible. The journal stores the native cursor with each append, allowing a
+omissions are visible. Oversized individual fields are omitted rather than prefix-cut before
+masking; bounded fields pass through the existing secret masker before any further clipping.
+A per-page character budget also stops large records from accumulating across 100 messages. The journal stores the native cursor with each append, allowing a
 restarted transport to resume without duplicating the last committed message. Subagent sessions
 are excluded. The selected top-level session is the one remembered by the managed plugin.
 
@@ -22,7 +24,12 @@ redraws. Fetching the plugin client's latest 100 messages loses earlier history 
 callback, and full snapshots grow without bound. A separate CLI server would add lifecycle and
 authentication responsibilities unnecessarily. Writing to the native database would introduce
 another history authority. The normalized journal is disposable projection state, never a
-replacement for the CLI's own database.
+replacement for the CLI's own database. The previous plugin snapshot remains available as a
+fallback when the native store is missing, busy or incompatible; the transport logs that
+fallback once per unavailable period. Snapshot fallback retains its existing recent-text limits.
+SQLite uses a zero busy timeout so an unavailable read never waits behind the CLI's writer.
+Projection switches keep the same native conversation but change the wire source identity; the
+backend carries it to the browser's conversation ID so both byte and entry cursors reset.
 
 Verification must exercise the real pinned CLI/store, transport reconnect, more than one page,
 tool success and error records, and a shared read through the backend with existing masking.

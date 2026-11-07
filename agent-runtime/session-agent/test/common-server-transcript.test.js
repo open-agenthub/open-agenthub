@@ -325,3 +325,25 @@ test('resume catch-up restores only the fresh context from the owner history vie
   const written = harness.writes.find(w => w.file === FILE + '.agenthub-tmp');
   assert.equal(Buffer.from(written.data).toString(), restored + '{"new":2}\n');
 });
+
+test('provider projections switch source identity without clearing or duplicating one native conversation', async () => {
+  const snapshot = '/home/agent/.opencode/agenthub-transcripts/ses_test.jsonl';
+  const native = '/home/agent/.opencode/agenthub-native-transcripts/ses_test.jsonl';
+  const files = { [snapshot]: '{"type":"user","message":{"content":"recent"}}\n',
+    [native]: '{"type":"user","message":{"content":"older"}}\n{"type":"assistant","message":{"content":"native"}}\n' };
+  let current = snapshot;
+  const driver = require('../../opencode/driver');
+  const harness = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token' },
+    { findTranscript: () => current, sameTranscriptConversation: driver.sameTranscriptConversation,
+      transcriptIdentity: driver.transcriptIdentity }, { files });
+  const before = await requestHttp(harness, 'GET', '/agenthub/transcript', auth);
+  current = native;
+  const after = await requestHttp(harness, 'GET', '/agenthub/transcript', auth);
+  assert.equal(after.body, files[native]);
+  assert.notEqual(before.headers['x-transcript-id'], after.headers['x-transcript-id']);
+  assert(!after.body.includes('Conversation cleared'));
+  current = snapshot;
+  const fallback = await requestHttp(harness, 'GET', '/agenthub/transcript', auth);
+  assert.equal(fallback.body, files[snapshot]);
+  assert.equal(fallback.headers['x-transcript-id'], before.headers['x-transcript-id']);
+});

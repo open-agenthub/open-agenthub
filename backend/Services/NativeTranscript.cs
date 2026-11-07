@@ -20,6 +20,8 @@ public sealed record TranscriptEntry(string Role, string Text, DateTime? At, str
     public IReadOnlyList<TranscriptAttachment>? Attachments { get; init; }
     [System.Text.Json.Serialization.JsonIgnore]
     public string? PromptId { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? SourceId { get; init; }
 }
 
 /// <summary>
