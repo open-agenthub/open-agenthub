@@ -11,12 +11,12 @@ const url=new URL(base);url.pathname='/'+name;
 const sql=(connection,query)=>execFileSync(psql,['-X','-A','-t','-v','ON_ERROR_STOP=1',connection],{input:query,encoding:'utf8',stdio:['pipe','pipe','pipe']}).trim();
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const request='11111111-1111-4111-8111-111111111111';
-let worker;
+let worker,handoff,startup;
 try{
  sql(base,'CREATE DATABASE '+name+';');
  sql(url.toString(),`CREATE TABLE session_provider_switches(request_id UUID,phase TEXT,progress JSONB); INSERT INTO session_provider_switches VALUES('${request}','requested','{}');`+fs.readFileSync(new URL('./gates.sql',import.meta.url),'utf8')+`INSERT INTO provider_recovery_proof_gates VALUES('${request}',1,'prepared',NULL,FALSE);`);
  worker=spawn(psql,['-X','-A','-t','-v','ON_ERROR_STOP=1',url.toString()],{stdio:['pipe','pipe','pipe']});
- worker.stdin.end("UPDATE session_provider_switches SET phase='prepared';");
+ worker.stdin.end("SELECT pg_advisory_lock(hashtextextended('proof529-session',1)); UPDATE session_provider_switches SET phase='prepared';");
  let pid;
  for(let attempt=0;attempt<100&&!pid;attempt++){
   pid=sql(url.toString(),"SELECT pid FROM pg_locks WHERE locktype='advisory' AND classid=529 AND objid=1 AND granted;");
@@ -24,9 +24,33 @@ try{
  }
  assert(pid,'external barrier must become observable');
  assert.equal(sql(url.toString(),'SELECT phase FROM session_provider_switches;'),'requested');
+ // A replacement backend may run schema initialization. A queued DDL lock can block
+ // an observer behind the intentionally held write; park other workers using only the
+ // existing lifecycle advisory key while the replacement initializes.
+ startup=spawn(psql,['-X','-A','-t','-v','ON_ERROR_STOP=1',url.toString()],{stdio:['pipe','pipe','pipe']});
+ const initialized=new Promise(resolve=>startup.once('exit',resolve));
+ startup.stdin.end('ALTER TABLE session_provider_switches ADD COLUMN proof_initialized BOOLEAN;');
+ for(let attempt=0;attempt<100;attempt++){
+  if(sql(url.toString(),"SELECT count(*) FROM pg_locks WHERE relation='session_provider_switches'::regclass AND mode='AccessExclusiveLock' AND NOT granted;")==='1')break;
+  await sleep(50);
+ }
+ assert.throws(()=>sql(url.toString(),"SET statement_timeout='300ms'; SELECT phase FROM session_provider_switches;"),/timeout/);
+ handoff=spawn(psql,['-X','-A','-t','-v','ON_ERROR_STOP=1',url.toString()],{stdio:['pipe','pipe','pipe']});
+ handoff.stdout.resume();handoff.stderr.resume();
+ handoff.stdin.write("SET application_name='proof529-handoff'; SELECT pg_advisory_lock(hashtextextended('proof529-session',1));\n");
+ let handoffPid;
+ for(let attempt=0;attempt<100&&!handoffPid;attempt++){
+  handoffPid=sql(url.toString(),"SELECT a.pid FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid WHERE a.application_name='proof529-handoff' AND l.locktype='advisory' AND NOT l.granted;");
+  if(!handoffPid)await sleep(50);
+ }
+ assert(handoffPid,'external lifecycle waiter must queue before the backend dies');
  const exited=new Promise(resolve=>worker.once('exit',resolve));
  assert.equal(sql(url.toString(),'SELECT pg_terminate_backend('+Number(pid)+');'),'t');
  assert.notEqual(await exited,0);
+ assert.equal(await initialized,0,'schema startup must finish while only the external lifecycle lease is held');
+ assert.equal(sql(url.toString(),"SELECT pg_try_advisory_lock(hashtextextended('proof529-session',1));"),'f','another worker must yield during startup');
+ const handedBack=new Promise(resolve=>handoff.once('exit',resolve));handoff.stdin.end();assert.equal(await handedBack,0);
+ assert.equal(sql(url.toString(),"SELECT pg_try_advisory_lock(hashtextextended('proof529-session',1));"),'t');
  assert.equal(sql(url.toString(),'SELECT phase FROM session_provider_switches;'),'requested');
  sql(url.toString(),"UPDATE provider_recovery_proof_gates SET released=TRUE; UPDATE session_provider_switches SET phase='prepared';");
  assert.equal(sql(url.toString(),'SELECT phase FROM session_provider_switches;'),'prepared');
@@ -47,5 +71,7 @@ try{
  console.log('PASS: real PostgreSQL barrier exposes the prior committed phase; backend termination rolls back only the blocked write; release permits one continuation.');
 }finally{
  if(worker?.exitCode===null)worker.kill('SIGTERM');
+ if(handoff?.exitCode===null)handoff.stdin.end();
+ if(startup?.exitCode===null)startup.kill('SIGTERM');
  sql(base,'DROP DATABASE IF EXISTS '+name+' WITH (FORCE);');
 }
