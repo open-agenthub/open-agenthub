@@ -30,6 +30,13 @@ function prepare(env) {
   if (env.AGENTHUB_STATE_RESTORED === undefined) {
     env.AGENTHUB_STATE_RESTORED = fs.existsSync('/tmp/.state-restored') ? '1' : '0';
   }
+  if (env.AGENTHUB_REQUIRE_NATIVE_RESUME === '1' && env.AGENTHUB_STATE_RESTORED === '1') {
+    const expected = env.AGENTHUB_NATIVE_SESSION_ID;
+    if (!UUID.test(expected || '')) throw new Error('The committed native conversation identity is unavailable.');
+    // An archive can contain shell-created conversations too. Bind the initial resume to
+    // the registry's current identity before discovery can follow an unrelated pointer.
+    fs.writeFileSync(path.join(codexHome(env), THREAD_ID_FILE), expected + '\n', { mode: 0o600 });
+  }
 
   // Scoped to the agent child in every mode. This used to skip interactive sessions on the
   // assumption that those are always subscription logins, which an autonomous run converted to
@@ -197,6 +204,7 @@ function findTranscript({ env, fs: fileSystem, launchedAt, cwd, pid }) {
     const match = rollouts.find(entry => entry.file.endsWith('-' + remembered + '.jsonl'));
     if (match) return match.file;
   }
+  if (env.AGENTHUB_REQUIRE_NATIVE_RESUME === '1') return null;
   // Only rollouts written since this process started: the restored archive may hold threads
   // from a shell-tab `codex`, and the one touched after launch is the one the agent is in.
   const fresh = rollouts

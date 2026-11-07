@@ -85,3 +85,13 @@ Retain legacy generation-zero behavior. Reject falling back to the latest provid
 a return to the same provider can have several independently retained generations. Reject
 a fresh startup with the old task as recovery: neither visible history nor workspace files
 reconstruct the native conversation or authorize silently re-running that task.
+
+## Native identity selection within an archive
+
+A real Codex archive can contain more than one CLI-created conversation. The recovery proof
+creates a second real native conversation and changes the archive pointer; the baseline then
+selects that other thread. A strict completed-generation resume now seeds the pointer from
+the registry's committed native identity before discovery. If that rollout is missing, it
+refuses to discover a different recent rollout. Explicit native context changes can still
+update the active process marker after startup. The original missing-state fix is shipped
+separately by #533; this identity binding and the wider fault matrix stay in #529/#530.

@@ -338,3 +338,34 @@ test('a resumed Codex thread is moved to the session\'s model, and the command s
   assert.equal(driver.buildCommand({ ...env, AGENTHUB_RESUME: '0', AGENTHUB_MODEL_NAME: '' }, true).args.includes('--model'), false);
   assert.equal(driver.isResumeCommand({ cmd: 'codex', args: [...tui.args.slice(0, -1)] }), false);
 });
+
+test('strict native resume binds an archive pointer to the committed conversation', () => {
+  const home=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'codex-strict-resume-'));
+  const committed='11111111-1111-4111-8111-111111111111';
+  const other='22222222-2222-4222-8222-222222222222';
+  try{
+    const sessions=path.join(home,'sessions');fs.mkdirSync(sessions);
+    const expected=path.join(sessions,'rollout-'+committed+'.jsonl');
+    fs.writeFileSync(expected,JSON.stringify({type:'session_meta',payload:{id:committed}})+'\n');
+    fs.writeFileSync(path.join(sessions,'rollout-'+other+'.jsonl'),JSON.stringify({type:'session_meta',payload:{id:other}})+'\n');
+    fs.writeFileSync(path.join(home,driver.THREAD_ID_FILE),other+'\n');
+    const env=environment({CODEX_HOME:home,AGENTHUB_REQUIRE_NATIVE_RESUME:'1',AGENTHUB_STATE_RESTORED:'1',AGENTHUB_RESUME:'1',AGENTHUB_NATIVE_SESSION_ID:committed});
+    driver.prepare(env);
+    assert.equal(driver.buildCommand(env,true).args.at(-1),committed);
+    assert.equal(driver.findTranscript({env,fs,launchedAt:Date.now()}),expected);
+  }finally{fs.rmSync(home,{recursive:true,force:true});}
+});
+
+test('strict native resume never discovers another recent rollout when the committed one is missing', () => {
+  const home=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'codex-strict-resume-'));
+  const committed='11111111-1111-4111-8111-111111111111';
+  const other='22222222-2222-4222-8222-222222222222';
+  try{
+    fs.mkdirSync(path.join(home,'sessions'));
+    fs.writeFileSync(path.join(home,'sessions','rollout-'+other+'.jsonl'),JSON.stringify({type:'session_meta',payload:{id:other}})+'\n');
+    const env=environment({CODEX_HOME:home,AGENTHUB_REQUIRE_NATIVE_RESUME:'1',AGENTHUB_STATE_RESTORED:'1',AGENTHUB_RESUME:'1',AGENTHUB_NATIVE_SESSION_ID:committed});
+    driver.prepare(env);
+    assert.equal(driver.findTranscript({env,fs,launchedAt:Date.now()}),null);
+    assert.throws(()=>driver.prepare({...env,AGENTHUB_NATIVE_SESSION_ID:''}),/committed native conversation identity is unavailable/);
+  }finally{fs.rmSync(home,{recursive:true,force:true});}
+});

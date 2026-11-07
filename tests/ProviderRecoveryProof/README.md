@@ -61,3 +61,12 @@ The fault trigger is never installed by the application or exposed as a public c
 is released/dropped during proof cleanup. Record real dispatch outcomes before claiming the
 phase matrix passed. Additional runtime/pod/storage/auth faults remain separate acceptance
 rows; backend phase crashes do not establish them.
+
+## Native identity inside a multi-conversation archive
+
+Add `PROOF_AGENTS=codex PROOF_POISON_NATIVE_POINTER=1 PROOF_RESUME_ARCHIVE=1` to the
+local native archive control. It creates a second conversation with the real CLI, records
+its actual native ID, points the restored native metadata at it, then resumes using the
+committed identity. Both histories come from actual CLI execution. The resumed model must
+receive the original conversation and new owner turn without the other conversation's text.
+This checks native identity selection, not a crash/replica result.
