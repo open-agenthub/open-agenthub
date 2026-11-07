@@ -79,7 +79,12 @@ watch(recipient, value => {
     } finally { if (generation === recipientGeneration) recipientBusy.value = false }
   }, 250)
 })
-const role = ref('Viewer'); const expiresAt = ref('')
+// People and links get separate role choices (#519). With one shared picker, adding someone as
+// Collaborator left it on Collaborator, and the next link silently handed terminal input to anyone
+// holding it. A link is the riskier grant, so its role starts at Viewer on every open and after
+// every link created, and only changes when the owner picks it for that link.
+const personRole = ref('Viewer'); const linkRole = ref('Viewer'); const expiresAt = ref('')
+const createdLinkRole = ref('')
 const blockedServers = ref(''); const blockedTools = ref(''); const oneTimeUrl = ref(''); const error = ref('')
 const linkDrafts = ref({})
 // 'load' — the overview itself answered 402, so there is nothing to edit and the gate replaces
@@ -127,7 +132,7 @@ async function addPerson() {
   const target = recipientChoice.value?.value || recipient.value.trim()
   if (!target) return
   await change(async () => {
-    await api.createShareUser(props.session.id, { recipient: target, role: role.value })
+    await api.createShareUser(props.session.id, { recipient: target, role: personRole.value })
     recipient.value = ''; recipientChoice.value = null
   })
 }
@@ -138,9 +143,11 @@ async function changePerson(person, value) {
 async function removePerson(person) { await change(() => api.deleteShareUser(props.session.id, person.recipient || person.owner)) }
 async function createLink() {
   await change(async () => {
-    const result = await api.createShareLink(props.session.id, { role: role.value, expiresAt: expiresAt.value || null })
+    const result = await api.createShareLink(props.session.id, { role: linkRole.value, expiresAt: expiresAt.value || null })
     const url = result.url || result.oneTimeUrl
     oneTimeUrl.value = url ? new URL(url, location.origin).href : ''
+    createdLinkRole.value = result.link?.role || linkRole.value
+    linkRole.value = 'Viewer'
   })
 }
 async function saveLink(link) { const draft = linkDrafts.value[link.id]; await change(() => api.updateShareLink(props.session.id, link.id, { role: draft.role, expiresAt: draft.expiresAt || null })) }
@@ -157,7 +164,9 @@ function reset() {
   recipientOptions.value = []
   recipientBusy.value = false
   recipientChecked.value = false
-  role.value = 'Viewer'
+  personRole.value = 'Viewer'
+  linkRole.value = 'Viewer'
+  createdLinkRole.value = ''
   expiresAt.value = ''
   blockedServers.value = ''
   blockedTools.value = ''
@@ -188,7 +197,7 @@ onUnmounted(() => { ++recipientGeneration; clearTimeout(recipientTimer) })
         <RecipientPicker v-model:query="recipient" v-model:selected="recipientChoice" :options="recipientSuggestions"
           input-label="Recipient username or email" list-label="Matching recipients" placeholder="Name, username, or exact email…"
           describedby="recipient-help" @submit="addPerson" />
-        <select v-model="role" class="fit" aria-label="Role"><option>Viewer</option><option>Collaborator</option></select><button @click="addPerson">Add</button>
+        <select v-model="personRole" class="fit" aria-label="Role for this person" data-person-role><option>Viewer</option><option>Collaborator</option></select><button @click="addPerson">Add</button>
       </div>
       <p v-if="recipientBusy" class="sub" role="status">Checking recipient…</p>
       <p v-if="recipientChoice" class="sub" role="status" data-recipient-chosen>Selected {{ recipientChoice.label }} (Username: {{ recipientChoice.value }}). Choose a role and press Add.</p>
@@ -210,12 +219,16 @@ onUnmounted(() => { ++recipientGeneration; clearTimeout(recipientTimer) })
 
     <section class="bordered">
       <div class="link-intro"><div><div class="sect-title">Share by link</div><div class="sub">Anyone with the link — treat it like a secret.</div></div>
-        <div class="add-row tight"><select v-model="role" class="fit"><option>Viewer</option><option>Collaborator</option></select><input v-model="expiresAt" class="fit exp" type="datetime-local" /><button @click="createLink">Create link</button></div>
+        <div class="add-row tight"><label class="link-role-label" for="share-link-role">Link role</label><select id="share-link-role" v-model="linkRole" class="fit" data-new-link-role><option>Viewer</option><option>Collaborator</option></select><input v-model="expiresAt" class="fit exp" type="datetime-local" aria-label="Link expiration" /><button data-create-link @click="createLink">Create {{ linkRole }} link</button></div>
       </div>
-      <p v-if="oneTimeUrl" class="one-time">Copy this one-time link now; it cannot be shown again.<button class="copy" @click="copyLink">Copy</button><code>{{ oneTimeUrl }}</code></p>
+      <p class="sub" :class="{ warn: linkRole === 'Collaborator' }" data-new-link-role-note>{{ linkRole === 'Collaborator'
+        ? 'Collaborator link: anyone holding it can type into the terminal.'
+        : 'Viewer link: anyone holding it can watch, not type.' }}</p>
+      <p v-if="oneTimeUrl" class="one-time" data-one-time-link>Copy this one-time <strong :class="['role-badge', createdLinkRole.toLowerCase()]" data-one-time-link-role>{{ createdLinkRole }}</strong> link now; it cannot be shown again.<button class="copy" @click="copyLink">Copy</button><code>{{ oneTimeUrl }}</code></p>
       <div v-for="link in links" :key="link.id" class="person link-edit">
         <span class="pname mono">{{ link.id }}</span>
-        <select v-model="linkDrafts[link.id].role" class="fit" :data-link-role="link.id"><option>Viewer</option><option>Collaborator</option></select>
+        <span :class="['role-badge', String(link.role).toLowerCase()]" :data-link-role-badge="link.id">{{ link.role === 'Collaborator' ? 'Collaborator · can type' : 'Viewer · read only' }}</span>
+        <select v-model="linkDrafts[link.id].role" class="fit" :aria-label="`Change role of link ${link.id}`" :data-link-role="link.id"><option>Viewer</option><option>Collaborator</option></select>
         <input v-model="linkDrafts[link.id].expiresAt" class="fit exp" :data-link-expiration="link.id" type="datetime-local" />
         <button :data-save-link="link.id" @click="saveLink(link)">Save</button>
         <button class="danger" @click="removeLink(link)">Revoke</button>
@@ -280,6 +293,10 @@ section.bordered { border-top: 1px solid var(--border); margin-top: 14px; paddin
 .one-time { border: 1px solid var(--accent); border-radius: 10px; padding: 10px 12px; font-size: 12px; margin: 10px 0 0; }
 .one-time .copy { margin-left: 8px; padding: 3px 10px; font-size: 11px; }
 .one-time code { display: block; overflow-wrap: anywhere; margin-top: 6px; color: var(--accent); font-family: var(--mono); }
+.link-role-label { font-size: 12px; color: var(--muted-2); }
+.warn { color: var(--danger); }
+.role-badge { display: inline-block; border: 1px solid var(--border-2); border-radius: 999px; padding: 1px 8px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.role-badge.collaborator { border-color: var(--danger); color: var(--danger); }
 .servers { font: 12px var(--mono); color: var(--muted-2); }
 .git-in-use { font-size: 13px; margin: 8px 0 0; }
 .git-row { margin: 6px 0; }
