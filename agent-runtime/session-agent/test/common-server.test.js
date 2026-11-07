@@ -615,6 +615,30 @@ test('a signal-killed PTY with code zero reports failure and retains its termina
   assert.match(harness.writes.find(write => write.file === '/run/termination').data, /signal 9/);
 });
 
+for (const order of ['runtime-first','native-first']) test('planned shutdown suppresses native signal-exit status: '+order, async () => {
+  const harness = createHarness({ AGENTHUB_STATE_PUT_URL: 'https://example.com/state',
+    AGENTHUB_CALLBACK_URL: 'https://example.com/internal/sessions/proof', AGENTHUB_CALLBACK_TOKEN: 'synthetic-proof-token' },
+    {}, { deferExec: true });
+  if(order==='runtime-first')harness.signals.SIGTERM();
+  harness.terminals[0].emitExit({ exitCode: 0, signal: 1 });
+  if(order==='native-first')harness.signals.SIGTERM();
+  await waitForExport(() => {
+    while(harness.pendingExec.length)harness.pendingExec.shift()();
+    return harness.exits.length > 0;
+  });
+  assert.deepEqual(harness.exits, [0]);
+  assert.ok(!harness.requests.some(request => request.url.endsWith('/status') && /Failed|Succeeded/.test(request.options.body)));
+});
+
+test('a fatal signal never authorizes the missing-resume fresh fallback', async () => {
+  const harness = createHarness({ AGENTHUB_RESUME: '1', TERMINATION_MESSAGE_PATH: '/run/termination' },
+    { isMissingResume: () => true });
+  harness.terminals[0].emitExit({ exitCode: 0, signal: 9 });
+  await settle(harness);
+  assert.equal(harness.terminals.length,1);
+  assert.deepEqual(harness.exits,[137]);
+});
+
 // The termination message is shown to everyone who can read the session list, so it carries
 // nothing the scrollback upload would not: a session secret value, a sign-in URL with its
 // authorization parameters and a device code are all gone before it is written.

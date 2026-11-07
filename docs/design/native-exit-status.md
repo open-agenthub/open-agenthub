@@ -9,3 +9,10 @@ Reject treating code zero as success regardless of the signal: it loses the dist
 between normal completion and a killed agent. Reject changing every zero exit to failure:
 the real native `/exit` controls must continue to report Succeeded. The real CLI proof uses
 both providers and recording status callbacks; it does not claim a real OOM event.
+
+Runtime SIGTERM/SIGINT marks intentional shutdown before final persistence. Ignore native
+exit notifications during that shutdown and recheck the flag before publishing deferred
+terminal status. This preserves backend ownership of pause/update/delete status, including
+a native exit racing an in-flight archive. A fatal signal never authorizes legacy missing-
+resume fallback: native missing-state diagnostics can permit that only after an ordinary
+unsignalled exit. Real runtime-SIGTERM controls emit no terminal status for both providers.

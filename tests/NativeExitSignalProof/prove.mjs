@@ -64,7 +64,7 @@ let child;
 try{
  const agents=(process.env.PROOF_AGENTS||'claude,codex').split(',');
  assert(agents.length&&agents.every(agent=>['claude','codex'].includes(agent)));
- for(const agent of agents)for(const outcome of ['signal','normal']){
+ for(const agent of agents)for(const outcome of ['signal','normal','shutdown']){
   const root=path.join(out,agent+'-'+outcome),home=path.join(root,'home'),work=path.join(root,'work');
   for(const dir of [work,path.join(home,'.claude'),path.join(home,'.codex'),path.join(root,'tmp')])fs.mkdirSync(dir,{recursive:true});
   const apiKey='synthetic-native-exit-proof';
@@ -97,12 +97,13 @@ try{
    if(outcome==='signal'){
     const native=fs.readFileSync(`/proc/${child.pid}/task/${child.pid}/children`,'utf8').trim().split(/\s+/).map(Number);
     assert.equal(native.length,1,'fault only the isolated real PTY child');process.kill(native[0],'SIGKILL');
+   }else if(outcome==='shutdown'){process.kill(child.pid,'SIGTERM');
    }else{
     await until(()=>Array.from({length:term.rows},(_,index)=>term.buffer.active.getLine(term.buffer.active.viewportY+index)?.translateToString(true)??'').some(line=>/^\s*[›❯]/.test(line)&&!line.includes('HISTORY-')));
     socket.send(JSON.stringify({type:'input',data:'/exit'}));await sleep(200);socket.send(JSON.stringify({type:'input',data:'\r'}));
    }
    let timer;try{await Promise.race([exited,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('native exit timeout')),30000);})]);}finally{clearTimeout(timer);}
-   const expected=outcome==='signal'?'Failed':'Succeeded';
+   const expected=outcome==='signal'?'Failed':outcome==='normal'?'Succeeded':undefined;
    assert.equal(statuses.slice(start).at(-1),expected,'real callback must classify native exit');
    if(outcome==='signal'){assert.notEqual(child.exitCode,0);assert.match(fs.readFileSync(env.TERMINATION_MESSAGE_PATH,'utf8'),/signal 9/);}
    else assert.equal(child.exitCode,0);
