@@ -14,6 +14,28 @@ public class AgentPodSpecFactoryTests
     [InlineData(AgentKind.Cursor)]
     [InlineData(AgentKind.OpenClaw)]
     [InlineData(AgentKind.OpenCode)]
+    public void Telemetry_UsesSessionCredentialOnlyForConfiguredExporter(AgentKind agent)
+    {
+        var context = Context();
+        var record = Record(agent, AgentAuthMode.ApiKey, SessionMode.Interactive, OpenClawApiKeySource.Anthropic);
+        var pod = AgentPodSpecFactory.Build(record,
+            new CreateSessionRequest { Agent = agent, AuthMode = AgentAuthMode.ApiKey },
+            context with { Runtime = context.Runtime with { TelemetryEnabled = true } });
+        var env = Assert.Single(pod.Containers).Env;
+        Assert.Contains(env, e => e.Name == "AGENTHUB_CALLBACK_TOKEN" && e.Value == record.CallbackToken);
+        if (agent == AgentKind.Claude)
+            Assert.Contains(env, e => e.Name == "OTEL_EXPORTER_OTLP_HEADERS" &&
+                e.Value == $"X-Agent-Token={record.CallbackToken}");
+        else
+            Assert.DoesNotContain(env, e => e.Name.StartsWith("OTEL_EXPORTER_", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(AgentKind.Claude)]
+    [InlineData(AgentKind.Codex)]
+    [InlineData(AgentKind.Cursor)]
+    [InlineData(AgentKind.OpenClaw)]
+    [InlineData(AgentKind.OpenCode)]
     public void TemporaryMount_IsPreparedBeforeConsumersWithoutRoot(AgentKind agent)
     {
         var pod = Build(agent, AgentAuthMode.ApiKey);

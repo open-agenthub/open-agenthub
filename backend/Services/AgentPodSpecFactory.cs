@@ -404,6 +404,7 @@ public static class AgentPodSpecFactory
             env.Add(new() { Name = "OTEL_METRICS_EXPORTER", Value = "otlp" });
             env.Add(new() { Name = "OTEL_TRACES_EXPORTER", Value = "none" });
             env.Add(new() { Name = "OTEL_LOGS_EXPORTER", Value = "none" });
+            env.Add(new() { Name = "OTEL_EXPORTER_OTLP_HEADERS", Value = $"X-Agent-Token={record.CallbackToken}" });
             env.Add(new() { Name = "OTEL_EXPORTER_OTLP_PROTOCOL", Value = "http/protobuf" });
             env.Add(new() { Name = "OTEL_EXPORTER_OTLP_ENDPOINT", Value = otlpBase });
             env.Add(new() { Name = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", Value = $"{otlpBase}/v1/metrics" });

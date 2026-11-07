@@ -43,8 +43,8 @@ The `Auto` rows come from the pinned CLI, not from guesswork:
 hub mounts (`UsageBilling.ForPod`) and stores it on the session row (`sessions.usage_billing`).
 Ingest reads the auth mode and that column, nothing else. The first version of this change sent
 the label to the pod as an OTLP resource attribute and read it back from the metrics. That was
-rejected in review: the OTLP endpoint is unauthenticated, and anything in its payload — a
-`billing` attribute, a `user.id` — is whatever the sender wrote. A test posts a payload that
+rejected in review: ingest resolves session identity from its callback credential, while a
+`billing` attribute or a `user.id` is sender-provided metadata. A test posts a payload that
 claims a subscription and a different owner for an API-key session; neither changes the result.
 The pod cannot change the column either. Its service account has no bindings and no mounted
 token, which `tests/helm/agent-service-account.ps1` checks against the rendered chart with every
@@ -157,3 +157,23 @@ month rolls over.
   shows them.
 - Rows that are `custom` or `unknown` show a pill and no money. An `unknown` row's tooltip names
   the cost the CLI reported, so it can still be found.
+
+
+## Session telemetry credentials
+
+OTLP ingest requires `X-Agent-Token` and resolves the session through the same callback-token
+registry as the other internal routes. The full parsed batch must match that session before
+any delta is stored; invalid credentials return 401 and mismatched batches return 400.
+Claude receives `OTEL_EXPORTER_OTLP_HEADERS` from the pod factory, including when an operator
+configures a custom telemetry collector. Such a collector must be trusted to receive the
+session credential and must preserve the header if it forwards to the hub.
+
+Codex, Cursor, OpenClaw and OpenCode have no OTLP exporter configured by the runtime. Their
+common usage reporter uses the credential on `/internal/sessions/{id}/usage` instead. Cursor
+currently has no usage reader. No anonymous compatibility mode is needed: the configured Claude
+exporter supports the header directly. Using a payload identity or permitting headerless reports
+was rejected because callback credentials already define attribution for internal reporting.
+Existing running Claude pods need a restart to receive the new exporter environment.
+
+`tests/TelemetryAuthProof` records the real CLI/HTTP/Postgres proof procedure; the backend suite
+also exercises credential validation and atomic batch rejection against real Postgres stores.
