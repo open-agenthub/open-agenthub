@@ -30,7 +30,9 @@ KUBECONFIG=<admin> KUBECTL=<kubectl> CHROME=<chrome-headless-shell> PW_MODULE=<p
 ```
 
 `STALL=connect`: the agent port refuses connections while starting. `STALL=accept-only`: it takes
-TCP connections and never answers the handshake.
+TCP connections and never answers the handshake. `STALL=apiserver` (with `APISERVER_PID`, and the
+ingress started with `STARVED=0`): the kube-apiserver is frozen with SIGSTOP for 45 s around the
+moment the agent becomes ready, so the hold comes from the real backend's pod read.
 
 ## Results
 
@@ -39,6 +41,12 @@ TCP connections and never answers the handshake.
 | main | one backend (no held replica) | recovers, 1.4 s (connect) / 2.0 s (accept-only) after ready |
 | main | two replicas, one held | **stuck** "disconnected"/"connecting…" 60 s after ready, no terminal socket created after ready (2/2 runs) |
 | branch | two replicas, one held | connected 2.0 s after ready (3/3, connect), 14.3 s (accept-only) |
+| main (frontend + backend) | one backend, API server frozen 45 s | 1 terminal attempt held through the freeze; connected 0.3 s after the thaw |
+| branch frontend, main backend | same | 4 attempts (each given up after 10 s); 0.3 s after the thaw (2/2) |
+| branch (frontend + backend) | same | 9 attempts (503 after 3 s each); 1.0 s after the thaw |
+
+Upgrade held by the real backend against the frozen API server (`ws` client, no browser): main
+100.0 s then 500; branch 503 with `Retry-After: 2` after 3.0 s.
 
 Not shown: the real k3s ingress and a really starved replica (both stand-ins), and the real
 session agent (a stand-in WebSocket server; the frontend only needs the socket to open).

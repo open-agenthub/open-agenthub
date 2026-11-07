@@ -9,11 +9,13 @@
 // healthy replica; one that landed on the starved one waits until the browser gives up on it.
 //
 // Run: node ingress.mjs <listen port> <backend port>   (e.g. 8080 8081; Vite proxies to :8080)
+// STARVED=0 sends every upgrade to the backend (one healthy replica).
 import http from 'node:http'
 import net from 'node:net'
 
 const [listen = '8080', backend = '8081'] = process.argv.slice(2)
 const held = []
+const starved = process.env.STARVED !== '0'
 let upgrades = 0
 
 const server = http.createServer((req, res) => {
@@ -27,7 +29,7 @@ const server = http.createServer((req, res) => {
 
 server.on('upgrade', (req, socket, head) => {
   const n = ++upgrades
-  if (n % 2 === 0) {
+  if (starved && n % 2 === 0) {
     console.log(`[ingress] upgrade #${n} ${req.url.split('?')[0]} -> starved replica (held)`)
     held.push(socket)
     socket.on('error', () => {})
@@ -47,4 +49,4 @@ server.on('upgrade', (req, socket, head) => {
   socket.on('error', () => upstream.destroy())
 })
 
-server.listen(Number(listen), '127.0.0.1', () => console.log(`[ingress] :${listen} -> backend :${backend} + a starved replica`))
+server.listen(Number(listen), '127.0.0.1', () => console.log(`[ingress] :${listen} -> backend :${backend}${starved ? ' + a starved replica' : ''}`))

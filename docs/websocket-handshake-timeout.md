@@ -25,6 +25,26 @@ as any other failed attempt, so the existing retry paths take over unchanged, an
 it moves on. 10 s is twice the bound on what the backend does before it accepts (the 5 s pod
 confirmation in `AgentPodRequests`).
 
+## Where the backend holds an upgrade
+
+Of the sockets the Workspace opens, `/events` does nothing before it accepts except an access
+lookup in Postgres; with the Kubernetes API frozen it still opens at once. The terminal and shell
+upgrades first read the session (pod phase and IP) from the Kubernetes API, and that client's own
+timeout is 100 s: with the API server frozen, the real backend held the terminal handshake for
+100.0 s and then answered 500. Under the browser's queue that is 100 s in which no other socket of
+the page can open.
+
+The backend now bounds that read for an upgrade at 3 s (`TerminalProxy.SessionReadTimeout`) and
+answers 503 with `Retry-After: 2`; measured against the frozen API server, 503 after 3.0 s. With
+the 5 s pod confirmation that stays under the client's 10 s. It does not by itself shorten the
+recovery after a stall: the attempt in flight when the API server comes back completes at once,
+with or without the bound (both connected within a second of the thaw in the proof). It keeps the
+backend from being the thing that blocks the page's other sockets, and it says "retry" instead of
+holding the request.
+
+The client timeout stays the primary fix, because it also covers holds the backend never sees
+(an ingress, a starved replica, a lost connection).
+
 ## Alternatives not taken
 
 - **A response timeout on the ingress.** It would fix only installations whose ingress we

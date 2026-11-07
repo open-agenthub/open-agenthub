@@ -11,7 +11,7 @@
 //
 // Env: UI (Vite, default http://localhost:5173), API (backend, default http://127.0.0.1:8080),
 // KUBECONFIG (admin), KUBECTL, CHROME, PW_MODULE, OUT, AGENT_PORT (the backend's
-// AgentHub__AgentPort; never 7681, which is this pod's own agent), STALL=connect|accept-only.
+// AgentHub__AgentPort; never 7681, which is this pod's own agent), STALL=connect|accept-only|apiserver.
 // STALL=accept-only: while "starting", the agent IP accepts TCP but never answers the WebSocket
 // handshake — what a container that has bound its port but is starved of CPU looks like.
 import { createRequire } from 'node:module'
@@ -128,13 +128,25 @@ function startAgent() {
   log(`pod Running at ${IP}; agent still starting (${STALL}) for`, STARTING_S, 's')
   await sleep(STARTING_S * 1000)
 
+  // STALL=apiserver: the Kubernetes API stalls (SIGSTOP of the rig's kube-apiserver) for
+  // FREEZE_S around the moment the agent becomes ready, as on an overloaded node. Every terminal
+  // upgrade then waits on the backend's pod read; the clock below starts at the thaw.
+  const freeze = STALL === 'apiserver' ? Number(process.env.FREEZE_S || 45) * 1000 : 0
+  if (freeze) { process.kill(Number(process.env.APISERVER_PID), 'SIGSTOP'); log('kube-apiserver frozen') }
   // Ready.
   await stopStall()
   const agent = startAgent()
+  if (freeze) {
+    await sleep(freeze)
+    process.kill(Number(process.env.APISERVER_PID), 'SIGCONT')
+    log('kube-apiserver thawed')
+  }
   kubectl('patch', 'pod', podName, '--subresource=status', '--type=merge', '-p', JSON.stringify({ status: {
     conditions: [{ type: 'Ready', status: 'True' }, { type: 'ContainersReady', status: 'True' }] } }))
   const readyAt = Date.now() - t0
   log('agent listening; pod Ready')
+  const frozenSockets = freeze ? constructed.filter(c => c.url.endsWith('/terminal') && c.state === 'new' && c.t > readyAt - freeze).length : 0
+  if (freeze) log('terminal sockets the app created while the API server was frozen:', frozenSockets)
 
   let connectedAt = null
   const deadline = Date.now() + RECONNECT_BUDGET_MS + 30000
