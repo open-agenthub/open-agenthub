@@ -6,6 +6,13 @@ $chartPath = Join-Path $repoRoot 'helm/open-agenthub'
 
 if (-not (Get-Command helm -ErrorAction SilentlyContinue)) { throw 'helm is required.' }
 
+# Read the expectation from Chart.yaml rather than repeating the number here: this is the
+# appVersion the fallback resolves to, and a literal version in this script turns every
+# release bump into a red build for no reason (the Codex smoke script does the same with
+# the pinned CLI version).
+$appVersion = (Select-String -Path (Join-Path $chartPath 'Chart.yaml') -Pattern '^appVersion:\s*"?([^"\s]+)"?').Matches[0].Groups[1].Value
+if (-not $appVersion) { throw 'could not read appVersion from Chart.yaml' }
+
 function Render([string[]]$Arguments = @()) {
     $output = & helm template agenthub-test $chartPath --namespace agenthub-test --set-string postgres.password=test-only @Arguments
     if ($LASTEXITCODE -ne 0) { throw "helm template failed with exit code $LASTEXITCODE" }
@@ -23,7 +30,7 @@ foreach ($expected in @(
     'AgentHub__AutoUpdateRuntimeImages: "false"',
     'AgentHub__ControlNamespace: "agenthub-test"',
     'Browser__Enabled: "true"',
-    'Browser__Image: "ghcr.io/open-agenthub/open-agenthub/browser:latest"',
+    "Browser__Image: `"ghcr.io/open-agenthub/open-agenthub/browser:$appVersion`"",
     'Browser__PullPolicy: "IfNotPresent"',
     'Browser__CpuRequest: "250m"',
     'Browser__MemoryRequest: "512Mi"',
@@ -49,26 +56,14 @@ $custom = Render @(
 )
 Assert-Contains $custom 'Browser__Image: "registry.example.com/browser:pinned"'
 
-# The browser follows the shared image.tag like every other component, and only falls
-# back to the chart version when no tag is configured at all.
+# The browser follows the shared image.tag like every other component, and the shared tag
+# falls back to the chart version when none is configured at all.
 $sharedTag = Render @('--set-string', 'image.tag=v9.9.9')
 Assert-Contains $sharedTag 'Browser__Image: "ghcr.io/open-agenthub/open-agenthub/browser:v9.9.9"'
 
-# Clearing image.tag means every agent image has to be given explicitly, so pin them all.
-$noTag = Render @(
-    '--set-string', 'image.tag=',
-    '--set-string', 'agent.images.claude=example/claude:test',
-    '--set-string', 'agent.images.codex=example/codex:test',
-    '--set-string', 'agent.images.cursor=example/cursor:test',
-    '--set-string', 'agent.images.openclaw=example/openclaw:test',
-    '--set-string', 'agent.images.opencode=example/opencode:test'
-)
-# Read the expectation from Chart.yaml rather than repeating the number here: this is the
-# appVersion the fallback resolves to, and a literal version in this script turns every
-# release bump into a red build for no reason (the Codex smoke script does the same with
-# the pinned CLI version).
-$appVersion = (Select-String -Path (Join-Path $chartPath 'Chart.yaml') -Pattern '^appVersion:\s*"?([^"\s]+)"?').Matches[0].Groups[1].Value
-if (-not $appVersion) { throw 'could not read appVersion from Chart.yaml' }
+# An explicitly empty image.tag is the default again: every component, the agent runtimes
+# included, resolves to appVersion instead of failing the render.
+$noTag = Render @('--set-string', 'image.tag=')
 Assert-Contains $noTag "Browser__Image: `"ghcr.io/open-agenthub/open-agenthub/browser:$appVersion`""
 Assert-Contains $custom 'Browser__ExtraEgressPorts__0: "8443"'
 
