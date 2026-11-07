@@ -61,6 +61,25 @@ async function reqStatus(method, path, body) {
   if (!res.ok) throw await responseError(res)
   return res.status
 }
+// A switch is refused with a code and, when the agent sent one, its own line (#478); both are
+// shown in the picker, so they are kept apart instead of folded into the message.
+async function switchSessionModel(id, model) {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(id)}/model`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+    body: JSON.stringify({ model })
+  })
+  if (res.status === 401) handle401()
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    const err = new Error(body?.error || String(res.status))
+    err.status = res.status
+    err.code = body?.error || null
+    err.detail = body?.detail || null
+    throw err
+  }
+  return body
+}
 async function uploadSessionFile(upload, body, options = {}) {
   if (!upload?.url || !['proxy', 'presigned'].includes(upload.kind))
     throw new Error('Invalid upload descriptor')
@@ -123,6 +142,7 @@ export const api = {
   modelCatalog: query => req('GET', `/model-catalog?${new URLSearchParams(query)}`),
   refreshModelCatalog: query => req('POST', `/model-catalog/refresh?${new URLSearchParams(query)}`),
   sessionModels: (id, refresh = false) => req('GET', `/sessions/${encodeURIComponent(id)}/models${refresh ? '?refresh=true' : ''}`),
+  switchSessionModel,
   terminalAttachments: (id, fileIds) => req('POST', `/sessions/${encodeURIComponent(id)}/terminal-attachments`, { fileIds }),
   workspaceDiff: (id, comparison = 'base') => req('GET', `/sessions/${encodeURIComponent(id)}/diff?comparison=${encodeURIComponent(comparison)}`),
   sessionFileCapabilities: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/files/capabilities`),

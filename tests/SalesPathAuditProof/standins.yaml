@@ -1,0 +1,69 @@
+# Stand-ins for what a prospect brings: a model endpoint (instead of a provider account) and a git
+# server that accepts pushes (instead of their GitHub/GitLab). Both listen on container port 443,
+# which the chart's allow-agent-egress policy already opens, so no chart value has to change.
+apiVersion: v1
+kind: Namespace
+metadata: { name: audit }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: gitd, namespace: audit }
+spec:
+  selector: { matchLabels: { app: gitd } }
+  template:
+    metadata: { labels: { app: gitd } }
+    spec:
+      containers:
+        - name: gitd
+          image: docker.io/library/alpine:3.20
+          command: [sh, -c]
+          args:
+            - |
+              set -e
+              # alpine/git ships without git-daemon; the distribution package has it.
+              apk add -q --no-cache git git-daemon
+              git config --global user.email audit@example.com; git config --global user.name audit
+              git config --global init.defaultBranch main
+              mkdir -p /srv && git init -q --bare /srv/demo.git
+              git -C /srv/demo.git config daemon.receivepack true
+              git clone -q /srv/demo.git /tmp/w && cd /tmp/w
+              printf '# Demo service\n\nA small repository for the onboarding test.\n' > README.md
+              git add README.md && git commit -qm "initial commit" && git push -q origin main
+              exec git daemon --reuseaddr --export-all --enable=receive-pack --base-path=/srv --port=443 --verbose /srv
+          ports: [{ containerPort: 443 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: gitd, namespace: audit }
+spec: { selector: { app: gitd }, ports: [{ port: 443, targetPort: 443 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: model, namespace: audit }
+spec:
+  selector: { matchLabels: { app: model } }
+  template:
+    metadata: { labels: { app: model } }
+    spec:
+      containers:
+        - name: model
+          image: docker.io/library/node:22-alpine
+          command: [node, /app/mock-model.mjs]
+          env:
+            - name: TASK_SCRIPT
+              value: |
+                set -x; cd /workspace/repo; pwd
+                git checkout -b docs/usage-section
+                printf '\n## Usage\n\nRun `make start`.\n' >> README.md
+                git -c user.name=agent -c user.email=agent@example.com commit -am "docs: add a usage section"
+                git push origin docs/usage-section 2>&1
+                sleep 90; echo still-running-after-90s
+                command -v gh && gh pr create --fill 2>&1 | head -5
+          volumeMounts: [{ name: app, mountPath: /app }]
+          ports: [{ containerPort: 443 }]
+      volumes: [{ name: app, configMap: { name: mock-model } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: model, namespace: audit }
+spec: { selector: { app: model }, ports: [{ port: 443, targetPort: 443 }] }

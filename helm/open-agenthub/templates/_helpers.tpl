@@ -28,12 +28,21 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 {{- end }}
 
+{{- /* An empty image.tag means the chart's appVersion, so chart X installs the images of
+       release X. A moving default such as "latest" under IfNotPresent let an install of one
+       chart run whatever main had published, never moved on upgrade, and let nodes that
+       pulled at different times run different builds. A moving tag stays possible, but
+       only when someone sets it. */ -}}
+{{- define "agenthub.imageTag" -}}
+{{- .Values.image.tag | default .Chart.AppVersion | toString -}}
+{{- end -}}
+
 {{- define "agenthub.backendImage" -}}
-{{ .Values.image.registry }}/backend:{{ .Values.image.tag }}
+{{ .Values.image.registry }}/backend:{{ include "agenthub.imageTag" . }}
 {{- end }}
 
 {{- define "agenthub.frontendImage" -}}
-{{ .Values.image.registry }}/frontend:{{ .Values.image.tag }}
+{{ .Values.image.registry }}/frontend:{{ include "agenthub.imageTag" . }}
 {{- end }}
 
 {{- define "agenthub.agentImage" -}}
@@ -46,7 +55,7 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 {{- $override -}}
 {{- else -}}
 {{- $registry := required "image.registry is required when agent.images.claude is empty" .Values.image.registry | trimSuffix "/" -}}
-{{- $tag := required "image.tag is required when agent.images.claude is empty" .Values.image.tag -}}
+{{- $tag := include "agenthub.imageTag" . -}}
 {{- printf "%s/agent-runtime-claude:%s" $registry $tag -}}
 {{- end -}}
 {{- end }}
@@ -57,7 +66,7 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 {{- $override -}}
 {{- else -}}
 {{- $registry := required "image.registry is required when agent.images.codex is empty" .Values.image.registry | trimSuffix "/" -}}
-{{- $tag := required "image.tag is required when agent.images.codex is empty" .Values.image.tag -}}
+{{- $tag := include "agenthub.imageTag" . -}}
 {{- printf "%s/agent-runtime-codex:%s" $registry $tag -}}
 {{- end -}}
 {{- end }}
@@ -68,7 +77,7 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 {{- $override -}}
 {{- else -}}
 {{- $registry := required "image.registry is required when agent.images.cursor is empty" .Values.image.registry | trimSuffix "/" -}}
-{{- $tag := required "image.tag is required when agent.images.cursor is empty" .Values.image.tag -}}
+{{- $tag := include "agenthub.imageTag" . -}}
 {{- printf "%s/agent-runtime-cursor:%s" $registry $tag -}}
 {{- end -}}
 {{- end }}
@@ -79,17 +88,15 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 {{- $override -}}
 {{- else -}}
 {{- $registry := required "image.registry is required when agent.images.openclaw is empty" .Values.image.registry | trimSuffix "/" -}}
-{{- $tag := required "image.tag is required when agent.images.openclaw is empty" .Values.image.tag -}}
+{{- $tag := include "agenthub.imageTag" . -}}
 {{- printf "%s/agent-runtime-openclaw:%s" $registry $tag -}}
 {{- end -}}
 {{- end }}
 
 {{- define "agenthub.browserImage" -}}
 {{- $repository := required "browser.image.repository is required" .Values.browser.image.repository | trimSuffix "/" -}}
-{{- /* Follow the shared image.tag before falling back to the chart version: every other
-       component is pinned by image.tag, and a deployment tracking "latest" would otherwise
-       ask for a browser tag that is only published for tagged releases. */ -}}
-{{- $tag := .Values.browser.image.tag | default .Values.image.tag | default .Chart.AppVersion -}}
+{{- /* Follow the shared tag like every other component; browser.image.tag only overrides it. */ -}}
+{{- $tag := .Values.browser.image.tag | default (include "agenthub.imageTag" .) -}}
 {{- printf "%s:%s" $repository $tag -}}
 {{- end }}
 
@@ -135,7 +142,7 @@ Host=postgres.{{ .Release.Namespace }}.svc.cluster.local;Database=agenthub;Usern
 {{- $override -}}
 {{- else -}}
 {{- $registry := required "image.registry is required when agent.images.opencode is empty" .Values.image.registry | trimSuffix "/" -}}
-{{- $tag := required "image.tag is required when agent.images.opencode is empty" .Values.image.tag -}}
+{{- $tag := include "agenthub.imageTag" . -}}
 {{- printf "%s/agent-runtime-opencode:%s" $registry $tag -}}
 {{- end -}}
 {{- end }}

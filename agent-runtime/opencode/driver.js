@@ -139,6 +139,8 @@ function inputBox(rows) {
 
 module.exports = {
   modelCatalog: require('./model-catalog'),
+  // No command takes a model in 1.18.35; the switch walks the picker (model-switch.js).
+  modelSwitch: { run: require('./model-switch').run },
   contextClearCommand: '/new',
   // /new redraws the welcome screen before creating a session. Waiting for its transcript
   // would deadlock the handover. Match the welcome composer's text and command footer:
