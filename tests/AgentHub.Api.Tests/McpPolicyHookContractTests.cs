@@ -51,6 +51,17 @@ public sealed class McpPolicyHookContractTests : IDisposable
     }
 
     [Fact]
+    public async Task DottedNamesTypedByTheOwner_DenyTheCallAsClaudeSpellsIt()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        _policy = new SessionMcpPolicy(["ops.tools"], ["mcp__docs__get-data.v2"], DateTime.UtcNow);
+        await using var backend = await StartBackendAsync();
+
+        Assert.Equal("deny", (await RunHookAsync(backend.Url, "mcp__ops_tools__search")).Decision);
+        Assert.Equal("deny", (await RunHookAsync(backend.Url, "mcp__docs__get-data_v2")).Decision);
+    }
+
+    [Fact]
     public async Task AllowedToolInARestrictedSession_GoesToTheApproval()
     {
         if (OperatingSystem.IsWindows()) return;

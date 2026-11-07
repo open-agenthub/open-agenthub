@@ -472,9 +472,10 @@ public sealed class InternalController : ControllerBase
     [HttpPost("mcp-policy")]
     public async Task<IActionResult> McpPolicy(string id, [FromBody] PermissionBody body, CancellationToken ct)
     {
-        if (await AuthAsync(id, ct) is null) return Unauthorized();
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
         var policy = await _shares.GetMcpPolicyAsync(id, ct);
-        var blocked = policy is not null && McpPolicyMatcher.IsBlocked(
+        var blocked = policy is not null && McpPolicyMatcher.IsBlocked(rec.Agent,
             body.Tool ?? string.Empty, policy.BlockedServers, policy.BlockedTools);
         return Ok(new { restricted = McpPolicyMatcher.Restricts(policy), decision = blocked ? "deny" : "allow" });
     }
@@ -489,7 +490,7 @@ public sealed class InternalController : ControllerBase
         if ((body.Tool ?? string.Empty).StartsWith("mcp__", StringComparison.Ordinal))
         {
             var sharing = await _shares.GetMcpPolicyAsync(id, ct);
-            if (sharing is not null && McpPolicyMatcher.IsBlocked(
+            if (sharing is not null && McpPolicyMatcher.IsBlocked(rec.Agent,
                     body.Tool ?? string.Empty, sharing.BlockedServers, sharing.BlockedTools))
                 return Ok(new { decision = "deny", reason = "Blocked by the session MCP sharing policy." });
         }

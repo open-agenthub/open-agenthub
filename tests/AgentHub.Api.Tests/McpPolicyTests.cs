@@ -1,3 +1,4 @@
+using AgentHub.Api.Models;
 using AgentHub.Api.Ee.Sharing;
 using Xunit;
 
@@ -12,7 +13,7 @@ public class McpPolicyTests
     [InlineData("mcp__github__search", false)]
     [InlineData("slack", false)]
     public void BlockedServer_MatchesOnlyClaudeServerBoundary(string tool, bool expected)
-        => Assert.Equal(expected, McpPolicyMatcher.IsBlocked(tool, ["slack"], []));
+        => Assert.Equal(expected, McpPolicyMatcher.IsBlocked(AgentKind.Codex, tool, ["slack"], []));
 
     [Theory]
     [InlineData("mcp__github__search", true)]
@@ -21,11 +22,37 @@ public class McpPolicyTests
     [InlineData("MCP__github__search", false)]
     public void BlockedTool_UsesOrdinalFullNameEquality(string tool, bool expected)
         => Assert.Equal(expected, McpPolicyMatcher.IsBlocked(
+            AgentKind.Codex,
             tool,
             [],
             ["mcp__github__search"]));
 
     [Fact]
     public void EmptyPolicy_DoesNotBlock()
-        => Assert.False(McpPolicyMatcher.IsBlocked("mcp__github__search", [], []));
+        => Assert.False(McpPolicyMatcher.IsBlocked(AgentKind.Codex, "mcp__github__search", [], []));
+
+    // The names the real Claude Code 2.1.318 reported for servers "ops.tools" and "team-docs" and a
+    // tool "get-data.v2", against the names an owner types into the sharing dialog.
+    [Theory]
+    [InlineData("mcp__ops_tools__search", true)]
+    [InlineData("mcp__team-docs__search", true)]
+    [InlineData("mcp__docs__get-data_v2", true)]
+    [InlineData("mcp__docs__read", false)]
+    [InlineData("mcp__ops_toolsx__search", false)]
+    public void Claude_MatchesNamesAsTheCliSpellsThem(string tool, bool expected)
+        => Assert.Equal(expected, McpPolicyMatcher.IsBlocked(
+            AgentKind.Claude, tool, ["ops.tools", "team-docs"], ["mcp__docs__get-data.v2"]));
+
+    [Theory]
+    [InlineData("ops.tools", "ops_tools")]
+    [InlineData("team-docs", "team-docs")]
+    [InlineData("mcp__docs__get-data.v2", "mcp__docs__get-data_v2")]
+    [InlineData("Docs Server", "Docs_Server")]
+    [InlineData("mcp__ops_tools__search", "mcp__ops_tools__search")]
+    public void NormalizeMcpName_ClaudeReplacesEverythingOutsideItsToolNameAlphabet(string name, string expected)
+        => Assert.Equal(expected, McpPolicyMatcher.NormalizeMcpName(AgentKind.Claude, name));
+
+    [Fact]
+    public void NormalizeMcpName_LeavesOtherRuntimesVerbatimUntilTheirRuleIsVerified()
+        => Assert.Equal("mcp__docs__get-data.v2", McpPolicyMatcher.NormalizeMcpName(AgentKind.Codex, "mcp__docs__get-data.v2"));
 }

@@ -156,6 +156,13 @@ environment is the floor: the agent can rewrite the state file but not its own p
 environment. A backend that cannot read the policy while building the pod sets the flag, since
 an unknown policy is treated like a restricted one.
 
+The limit of this: the hook runs as the agent's own uid, so the remembered state is a file the
+agent can delete. There is no place in the pod it cannot write to — the session agent's memory
+is reachable over loopback with a token from the same environment. An agent that removes the file
+during an outage drops back to the environment flag, so a restriction added after the pod
+started is then not enforced until the backend answers again. With the backend reachable the
+live answer decides every call, and nothing in the pod changes that.
+
 Rejected: denying every MCP call whenever the endpoint is unreachable. It would take user MCP
 servers away from unrestricted sessions for every backend blip, for no protection they asked for.
 Also rejected: the environment variable alone. It goes stale the moment the owner adds a block to
