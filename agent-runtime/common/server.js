@@ -180,6 +180,12 @@ function createCommonServer(options = {}) {
   const signInPrivacy = createSignInPrivacy();
 
   const preparation = driver.prepare(env);
+  // A completed replacement must resume its own native state. The legacy fresh fallback
+  // could otherwise run the original source task against the replacement provider.
+  const nativeResumeRequired = env.AGENTHUB_REQUIRE_NATIVE_RESUME === '1';
+  if (nativeResumeRequired && (env.AGENTHUB_RESUME !== '1' || env.AGENTHUB_STATE_RESTORED !== '1')) {
+    throw new Error('Native resume is required; saved conversation state was not restored. Restore the generation archive before retrying.');
+  }
   const childEnv = preparation && preparation.childEnv;
   if (childEnv !== undefined && (!childEnv || typeof childEnv !== 'object' || Array.isArray(childEnv))) {
     throw new Error('Agent driver prepare childEnv must be an object');
@@ -1191,7 +1197,7 @@ function createCommonServer(options = {}) {
     }
 
     const elapsedMs = now() - launchedAt;
-    if (attemptedResume && !retriedFresh &&
+    if (!nativeResumeRequired && !providerTargetRequest && attemptedResume && !retriedFresh &&
         driver.isMissingResume(attemptOutput, exitCode, elapsedMs)) {
       retriedFresh = true;
       remember(retryMessage());

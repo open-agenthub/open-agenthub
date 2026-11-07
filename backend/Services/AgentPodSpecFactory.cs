@@ -218,8 +218,9 @@ public static class AgentPodSpecFactory
             new() { Name = "AGENTHUB_NETWORK_MCP_ENABLED", Value = context.Runtime.NetworkMcpEnabled && request.Mode != SessionMode.Scheduled ? "1" : "0" },
             new() { Name = "AGENTHUB_CONTAINERS_ENABLED", Value = context.Runtime.ContainersEnabled && context.Runtime.SpawnMcpEnabled && request.Mode != SessionMode.Scheduled ? "1" : "0" },
             new() { Name = "AGENTHUB_RESUME", Value = string.IsNullOrEmpty(context.StateGetUrl) ? "0" : "1" },
+            new() { Name = "AGENTHUB_REQUIRE_NATIVE_RESUME", Value = record.ExecutionGeneration > 0 && !string.IsNullOrEmpty(context.StateGetUrl) ? "1" : "0" },
             new() { Name = "AGENTHUB_PROVIDER_SWITCH_ID", Value = context.ProviderSwitchRequestId ?? "" },
-            new() { Name = "AGENTHUB_PROMPT", Value = context.InitialPromptOverride ?? request.Prompt ?? "" },
+            new() { Name = "AGENTHUB_PROMPT", Value = context.InitialPromptOverride ?? (record.ExecutionGeneration > 0 && !string.IsNullOrEmpty(context.StateGetUrl) ? "" : request.Prompt ?? "") },
             new() { Name = "AGENTHUB_SYSTEM_PROMPT", Value = request.SystemPrompt ?? "" },
             // Claude, Codex and OpenCode read the flag off the session record on every tool call, so
             // it can be toggled while they run. Cursor and OpenClaw have no per-call hook to ask

@@ -1489,7 +1489,7 @@ public sealed partial class KubernetesSessionService : ISessionService, IExecuti
                 throw new RuntimeUpdateConfirmationRequiredException("The agent may still be working, or this runtime cannot confirm that it is idle.");
             record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
             if (record.QuestionPending) throw new RuntimeUpdateConfirmationRequiredException("The agent has a question waiting for an answer, so the hub cannot confirm it is idle.");
-            if (await _artifacts.HeadAsync(IArtifactStore.StateKey(Sanitize(owner), id, record.Agent), ct) is null)
+            if (await _artifacts.HeadAsync(AgentSessionResourceOrchestrator.NativeStateKey(Sanitize(owner), record), ct) is null)
                 throw new InvalidOperationException("No saved conversation archive is available yet.");
             return await PauseAndResumeRuntimeCoreAsync(owner, id, ct);
         }
@@ -1668,7 +1668,7 @@ public sealed partial class KubernetesSessionService : ISessionService, IExecuti
         var record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
         // Archives are keyed by the hashed owner key, like every other session object; the raw
         // owner name never matches one, so the update stopped here with the session paused.
-        if (await _artifacts.HeadAsync(IArtifactStore.StateKey(Sanitize(owner), id, record.Agent), ct) is null)
+        if (await _artifacts.HeadAsync(AgentSessionResourceOrchestrator.NativeStateKey(Sanitize(owner), record), ct) is null)
             throw new InvalidOperationException("No saved conversation archive is available. The session remains paused.");
         return await ResumeSessionCoreAsync(owner, id, ct);
     }
@@ -1688,6 +1688,11 @@ public sealed partial class KubernetesSessionService : ISessionService, IExecuti
         RefusePendingReplacement(rec);
         if (rec.Mode == SessionMode.Scheduled)
             throw new ArgumentException("Scheduled sessions are not resumed; they run on their schedule.");
+        // Refuse before deleting a surviving pod or updating status: a fresh replacement
+        // conversation cannot reconstruct the already committed native generation.
+        if (rec.ExecutionGeneration > 0 && (!_artifacts.IsConfigured ||
+            await _artifacts.HeadAsync(AgentSessionResourceOrchestrator.NativeStateKey(Sanitize(owner), rec), ct) is null))
+            throw new InvalidOperationException("The current generation's saved conversation archive is unavailable. Restore it before resuming; the workspace is retained.");
         await EnsureAgentAllowedAsync(rec.Agent, ct);
         await EnforceUsageLimitAsync(owner, rec.Agent, rec.AuthMode, rec.Mode, ct);
 

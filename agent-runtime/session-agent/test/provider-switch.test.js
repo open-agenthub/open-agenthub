@@ -8,6 +8,20 @@ const headers = { 'X-Agent-Token': 'correct-token' };
 const env = { AGENTHUB_CALLBACK_TOKEN: 'correct-token', AGENTHUB_STATE_PUT_URL: 'https://example.com/state' };
 const route = (h, action, id = requestId, nativeId) => requestHttp(h, 'POST', '/agenthub/provider-switch', headers, JSON.stringify({ requestId: id, action, nativeId }));
 
+test('required native resume refuses unrestored state before spawning and never falls back to fresh', () => {
+  const strict = { AGENTHUB_REQUIRE_NATIVE_RESUME: '1', AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '0' };
+  assert.throws(() => createHarness(strict), /saved conversation state was not restored/);
+  const h = createHarness({ ...strict, AGENTHUB_STATE_RESTORED: '1' }, { isMissingResume: () => true });
+  h.terminals[0].emitExit({ exitCode: 1 });
+  assert.equal(h.spawns.length, 1);
+});
+
+test('an uncertain replacement native resume never falls back to a fresh target', () => {
+  const h = createHarness({ ...env, AGENTHUB_PROVIDER_SWITCH_ID: requestId }, { isMissingResume: () => true });
+  h.terminals[0].emitExit({ exitCode: 1 });
+  assert.equal(h.spawns.length, 1);
+});
+
 test('reservation requires a supported driver, valid authority and a completed safe turn', async () => {
   const unsupported = createHarness(env);
   assert.equal((await requestHttp(unsupported, 'GET', '/agenthub/provider-switch')).status, 401);

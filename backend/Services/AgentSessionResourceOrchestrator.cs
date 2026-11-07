@@ -15,11 +15,14 @@ public sealed record AgentSessionArtifactUrls(
 /// </summary>
 public static class AgentSessionResourceOrchestrator
 {
+    public static string NativeStateKey(string ownerKey, SessionRecord record) =>
+        record.ExecutionGeneration == 0 ? IArtifactStore.StateKey(ownerKey, record.Id, record.Agent)
+            : IArtifactStore.ExecutionStateKey(ownerKey, record.Id, record.ExecutionGeneration, record.Agent);
+
     public static AgentSessionArtifactUrls PresignArtifactUrls(
         IArtifactStore artifacts, string ownerKey, SessionRecord record, bool resume, TimeSpan ttl)
     {
-        var stateKey = record.ExecutionGeneration == 0 ? IArtifactStore.StateKey(ownerKey, record.Id, record.Agent)
-            : IArtifactStore.ExecutionStateKey(ownerKey, record.Id, record.ExecutionGeneration, record.Agent);
+        var stateKey = NativeStateKey(ownerKey, record);
         return new AgentSessionArtifactUrls(
             artifacts.PresignPut(stateKey, ttl),
             resume ? artifacts.PresignGet(stateKey, ttl) : "",
