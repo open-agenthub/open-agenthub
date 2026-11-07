@@ -66,7 +66,7 @@ describe('ShareSessionDialog MCP policy', () => {
     const wrapper = mount(ShareSessionDialog, { props: { session } })
     await flushPromises()
 
-    await wrapper.findAll('button').find(b => b.text() === 'Create link').trigger('click')
+    await wrapper.get('[data-create-link]').trigger('click')
     await flushPromises()
 
     expect(wrapper.get('.one-time code').text()).toBe('https://hub.example.com/shared/tok')
@@ -93,7 +93,7 @@ describe('ShareSessionDialog without a license', () => {
     expect(wrapper.text()).not.toContain('An active enterprise license is required')
     expect(wrapper.text()).not.toContain('402')
     expect(wrapper.find('[data-blocked-servers]').exists()).toBe(false)
-    expect(wrapper.findAll('button').find(b => b.text() === 'Create link')).toBeUndefined()
+    expect(wrapper.find('[data-create-link]').exists()).toBe(false)
   })
 
   it('keeps the form and adds the gate when a change is refused with 402', async () => {
@@ -219,7 +219,7 @@ describe('recipient picker', () => {
     expect(apiMocks.api.findShareRecipients).toHaveBeenCalledTimes(1)
     expect(apiMocks.api.createShareUser).not.toHaveBeenCalled()
 
-    await wrapper.get('[aria-label="Role"]').setValue('Collaborator')
+    await wrapper.get('[aria-label="Role for this person"]').setValue('Collaborator')
     await wrapper.findAll('button').find(button => button.text() === 'Add').trigger('click')
     await flushPromises()
     expect(apiMocks.api.createShareUser).toHaveBeenCalledWith('s1', { recipient: 'bob', role: 'Collaborator' })
