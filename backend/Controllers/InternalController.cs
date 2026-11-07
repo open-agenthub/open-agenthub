@@ -25,6 +25,7 @@ namespace AgentHub.Api.Controllers;
 [Route("internal/sessions/{id}")]
 public sealed class InternalController : ControllerBase
 {
+    private readonly ISessionExecutionStore? _executions;
     private readonly ISessionStore _store;
     private readonly IEnumerable<INotifier> _notifiers;
     private readonly ISessionService _svc;
@@ -57,8 +58,9 @@ public sealed class InternalController : ControllerBase
         ISessionMessageDelivery? delivery = null, IAccountFailover? accountFailover = null,
         IClaudeLoginSync? loginSync = null, ISecretRequestStore? secretRequests = null,
         ISessionContextClear? contextClear = null, ISessionAccessService? access = null, ISessionSharingService? sharing = null,
-        ISessionModelCatalogs? modelCatalogs = null)
+        ISessionModelCatalogs? modelCatalogs = null, ISessionExecutionStore? executions = null)
     {
+        _executions = executions;
         _modelCatalogs = modelCatalogs;
         _contextClear = contextClear;
         _access = access;
@@ -343,7 +345,9 @@ public sealed class InternalController : ControllerBase
         using var reader = new StreamReader(Request.Body);
         var text = await reader.ReadToEndAsync(ct);
         if (text.Length > ScrollbackLimits.MaxChars) text = text[^ScrollbackLimits.MaxChars..];
-        await _store.SetScrollbackAsync(id, text, ct);
+        if (rec.ExecutionGeneration > 0 && _executions is { } executions)
+            await executions.SaveScrollbackAsync(rec.Owner, id, rec.ExecutionGeneration, text, ct);
+        else await _store.SetScrollbackAsync(id, text, ct);
         return NoContent();
     }
 
@@ -361,7 +365,10 @@ public sealed class InternalController : ControllerBase
 
         using var reader = new StreamReader(Request.Body);
         var text = await reader.ReadToEndAsync(ct);
-        await _store.SetTranscriptAsync(id, NativeTranscript.TrimToLineCap(text, ScrollbackLimits.MaxChars), ct);
+        var bounded = NativeTranscript.TrimToLineCap(text, Math.Min(ScrollbackLimits.MaxChars, PostgresSessionExecutionStore.MaxHistoryChars));
+        if (rec.ExecutionGeneration > 0 && _executions is { } executions)
+            await executions.SaveTranscriptAsync(rec.Owner, id, rec.ExecutionGeneration, bounded, ct);
+        else await _store.SetTranscriptAsync(id, bounded, ct);
         return NoContent();
     }
 

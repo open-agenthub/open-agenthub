@@ -66,6 +66,7 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
     private sealed class Follow
     {
         public readonly SemaphoreSlim Gate = new(1, 1);
+        public long Generation = -1;
         public string? PodIp;
         public string? Token;
         public string? TranscriptId;
@@ -86,6 +87,7 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
 
     public async Task<IReadOnlyList<TranscriptEntry>?> ReadAsync(SessionInfo session, CancellationToken ct)
     {
+        if (session.ProviderSwitchPending) return null;
         if (session.Phase != SessionStatus.Running || string.IsNullOrEmpty(session.PodIp)) return null;
         Sweep();
         var follow = _follows.GetOrAdd(session.Id, _ => new Follow());
@@ -97,7 +99,8 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
             if (!await _downloads.WaitAsync(0, ct)) return null;
             downloadAcquired = true;
             follow.LastUsed = _now();
-            if (follow.PodIp != session.PodIp) follow.Reset(session.PodIp);
+            if (follow.PodIp != session.PodIp || follow.Generation != session.ExecutionGeneration)
+            { follow.Token = null; follow.Reset(session.PodIp); follow.Generation = session.ExecutionGeneration; }
             if (follow.UnsupportedUntil > _now()) return null;
             if (follow.Token is null)
             {

@@ -13,9 +13,15 @@ public sealed record SessionExecution(long Generation, AgentKind Agent, string N
     string? CredentialId, string TranscriptKey, string StateKey, bool Sealed);
 public sealed record ExecutionHistory(SessionExecution Current, IReadOnlyList<TranscriptEntry> Previous, bool Omitted, string CurrentTranscript);
 
+public sealed record ExecutionSnapshot(string Transcript, string Scrollback);
+
 public interface ISessionExecutionStore
 {
     Task InitializeAsync(CancellationToken ct = default);
+    Task<ExecutionSnapshot?> SnapshotAsync(string owner, string id, long generation, CancellationToken ct = default)
+        => Task.FromResult<ExecutionSnapshot?>(null);
+    Task SaveScrollbackAsync(string owner, string id, long generation, string text, CancellationToken ct = default)
+        => throw new NotSupportedException();
     Task<ExecutionHistory?> ReadAsync(string owner, string id, CancellationToken ct = default);
     Task<SessionExecution?> EnsureLegacyAsync(string owner, string id, CancellationToken ct = default);
     // Only lifecycle orchestration may seal and advance; there is deliberately no HTTP writer.
@@ -45,6 +51,12 @@ public sealed class PostgresSessionExecutionStore(IConfiguration configuration) 
             );
             CREATE UNIQUE INDEX IF NOT EXISTS session_execution_current
                 ON session_executions(session_id) WHERE NOT sealed;
+            CREATE TABLE IF NOT EXISTS session_execution_snapshots (
+                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                generation BIGINT NOT NULL CHECK(generation >= 0),
+                transcript TEXT NOT NULL DEFAULT '', scrollback TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(session_id,generation)
+            );
             CREATE TABLE IF NOT EXISTS session_execution_entries (
                 session_id TEXT NOT NULL, generation BIGINT NOT NULL, ordinal INTEGER NOT NULL,
                 entry JSONB NOT NULL,
@@ -79,8 +91,9 @@ public sealed class PostgresSessionExecutionStore(IConfiguration configuration) 
         // One snapshot prevents an advance between reading the current generation and its prefix.
         await using var transaction = await connection.BeginTransactionAsync(System.Data.IsolationLevel.RepeatableRead, ct);
         await using var current = new NpgsqlCommand("""
-            SELECT e.generation,e.agent,e.native_id,e.credential_id,e.transcript_key,e.state_key,e.sealed,e.current_transcript
+            SELECT e.generation,e.agent,e.native_id,e.credential_id,e.transcript_key,e.state_key,e.sealed,COALESCE(NULLIF(p.transcript,''),e.current_transcript)
             FROM session_executions e JOIN sessions s ON s.id=e.session_id
+            LEFT JOIN session_execution_snapshots p ON p.session_id=e.session_id AND p.generation=e.generation
             WHERE s.owner=@owner AND s.id=@id AND NOT e.sealed
             """, connection, transaction);
         current.Parameters.AddWithValue("owner", owner); current.Parameters.AddWithValue("id", id);
@@ -120,14 +133,33 @@ public sealed class PostgresSessionExecutionStore(IConfiguration configuration) 
         return new(execution, result, omitted, snapshot);
     }
 
-    public async Task SaveTranscriptAsync(string owner, string id, long generation, string jsonl, CancellationToken ct = default)
+    public async Task<ExecutionSnapshot?> SnapshotAsync(string owner, string id, long generation, CancellationToken ct = default)
     {
-        if (jsonl.Length > MaxHistoryChars) throw new ArgumentException("Transcript exceeds snapshot budget.");
         await using var command = _db.CreateCommand("""
-            UPDATE session_executions e SET current_transcript=@text FROM sessions s
-            WHERE e.session_id=s.id AND s.owner=@owner AND s.id=@id AND e.generation=@generation AND NOT e.sealed
+            SELECT p.transcript,p.scrollback FROM session_execution_snapshots p JOIN sessions s ON s.id=p.session_id
+            WHERE s.id=@id AND s.owner=@owner AND p.generation=@generation
             """);
-        command.Parameters.AddWithValue("text", jsonl); command.Parameters.AddWithValue("owner", owner);
+        command.Parameters.AddWithValue("id", id); command.Parameters.AddWithValue("owner", owner); command.Parameters.AddWithValue("generation", generation);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? new(reader.GetString(0), reader.GetString(1)) : null;
+    }
+    public Task SaveTranscriptAsync(string owner, string id, long generation, string jsonl, CancellationToken ct = default)
+        => SaveSnapshotAsync(owner, id, generation, jsonl, false, ct);
+    public Task SaveScrollbackAsync(string owner, string id, long generation, string text, CancellationToken ct = default)
+        => SaveSnapshotAsync(owner, id, generation, text, true, ct);
+    private async Task SaveSnapshotAsync(string owner, string id, long generation, string text, bool scrollback, CancellationToken ct)
+    {
+        if (text.Length > MaxHistoryChars) throw new ArgumentException("Execution snapshot exceeds its budget.");
+        // Column choice is internal; neither callback content nor native identifiers become SQL.
+        var field = scrollback ? "scrollback" : "transcript";
+        await using var command = _db.CreateCommand($"""
+            INSERT INTO session_execution_snapshots(session_id,generation,{field})
+            SELECT s.id,@generation,@text FROM sessions s WHERE s.id=@id AND s.owner=@owner AND
+                ((s.provider_switch_pending AND s.execution_generation=@generation) OR EXISTS (
+                    SELECT 1 FROM session_executions e WHERE e.session_id=s.id AND e.generation=@generation AND NOT e.sealed))
+            ON CONFLICT(session_id,generation) DO UPDATE SET {field}=EXCLUDED.{field}
+            """);
+        command.Parameters.AddWithValue("text", text); command.Parameters.AddWithValue("owner", owner);
         command.Parameters.AddWithValue("id", id); command.Parameters.AddWithValue("generation", generation);
         if (await command.ExecuteNonQueryAsync(ct) != 1) throw new InvalidOperationException("Execution is no longer current.");
     }

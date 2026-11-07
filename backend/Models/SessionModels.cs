@@ -783,6 +783,8 @@ public static class SessionDuplication
 /// <summary>View of a running or scheduled session.</summary>
 public record SessionInfo
 {
+    public long ExecutionGeneration { get; init; }
+    public bool ProviderSwitchPending { get; init; }
     public string? AccessRole { get; init; }
     public bool? CanWrite { get; init; }
     public bool? AutoUpdateRuntimeImages { get; init; }

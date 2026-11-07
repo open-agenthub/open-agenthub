@@ -231,6 +231,8 @@ function resetFromText(text, from) {
 }
 
 module.exports = {
+  supportsProviderSwitch: true,
+  nativeIdentity: ({ file }) => path.basename(file, '.jsonl'),
   modelCatalog: require('./model-catalog'),
   contextClearCommand: '/clear',
   turnHooks: true,

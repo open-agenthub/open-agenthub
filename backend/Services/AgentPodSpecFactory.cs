@@ -34,6 +34,9 @@ public sealed record AgentPodRuntimeSettings
 /// <summary>Non-secret inputs used to construct an agent pod.</summary>
 public sealed record PodBuildContext
 {
+    public SessionWorkspace? Workspace { get; init; }
+    public string? ProviderSwitchRequestId { get; init; }
+    public string? InitialPromptOverride { get; init; }
     public required string Owner { get; init; }
     public required string CredentialsSecretName { get; init; }
     public required string ClaudeCredentialSecretName { get; init; }
@@ -170,7 +173,8 @@ public static class AgentPodSpecFactory
         };
         var volumes = new List<V1Volume>
         {
-            new() { Name = "workspace", EmptyDir = new V1EmptyDirVolumeSource() },
+            new() { Name = "workspace", EmptyDir = context.Workspace is null ? new V1EmptyDirVolumeSource() : null,
+                PersistentVolumeClaim = context.Workspace is null ? null : new V1PersistentVolumeClaimVolumeSource { ClaimName = context.Workspace.ClaimName } },
             new() { Name = "home", EmptyDir = new V1EmptyDirVolumeSource() },
             new() { Name = "tmp", EmptyDir = new V1EmptyDirVolumeSource() },
             new() { Name = "creds", Secret = new V1SecretVolumeSource { SecretName = context.CredentialsSecretName, Optional = true, DefaultMode = 0x1A0, Items = credentialItems } }
@@ -210,7 +214,8 @@ public static class AgentPodSpecFactory
             new() { Name = "AGENTHUB_NETWORK_MCP_ENABLED", Value = context.Runtime.NetworkMcpEnabled && request.Mode != SessionMode.Scheduled ? "1" : "0" },
             new() { Name = "AGENTHUB_CONTAINERS_ENABLED", Value = context.Runtime.ContainersEnabled && context.Runtime.SpawnMcpEnabled && request.Mode != SessionMode.Scheduled ? "1" : "0" },
             new() { Name = "AGENTHUB_RESUME", Value = string.IsNullOrEmpty(context.StateGetUrl) ? "0" : "1" },
-            new() { Name = "AGENTHUB_PROMPT", Value = request.Prompt ?? "" },
+            new() { Name = "AGENTHUB_PROVIDER_SWITCH_ID", Value = context.ProviderSwitchRequestId ?? "" },
+            new() { Name = "AGENTHUB_PROMPT", Value = context.InitialPromptOverride ?? request.Prompt ?? "" },
             new() { Name = "AGENTHUB_SYSTEM_PROMPT", Value = request.SystemPrompt ?? "" },
             // Claude, Codex and OpenCode read the flag off the session record on every tool call, so
             // it can be toggled while they run. Cursor and OpenClaw have no per-call hook to ask
@@ -547,7 +552,7 @@ public static class AgentPodSpecFactory
             });
         }
 
-        if (hasRepo)
+        if (hasRepo || context.Workspace is not null)
         {
             var reposEnv = string.Join("\n", DestFor(repos).Select(x => $"{x.dest}\t{x.repo.Branch}\t{x.repo.Url}"));
             const string cloneScript = """
@@ -681,10 +686,12 @@ public static class AgentPodSpecFactory
             initContainers.Add(new V1Container
             {
                 Name = "git-clone", Image = context.Runtime.GitCloneImage,
-                Command = new List<string> { "/bin/sh", "-c", ShellScript(cloneScript) },
+                Command = new List<string> { "/bin/sh", "-c", ShellScript(context.Workspace is null ? cloneScript :
+                    SessionWorkspaceVolumes.BootstrapGuard + "\n" + cloneScript + "\n" + SessionWorkspaceVolumes.BootstrapComplete) },
                 Env = new List<V1EnvVar>
                 {
                     new() { Name = "REPOS", Value = reposEnv },
+                    new() { Name = "WORKSPACE_FINGERPRINT", Value = SessionWorkspaceVolumes.Fingerprint(context.Workspace?.Repositories ?? "[]") },
                     new() { Name = "HOME", Value = home }
                 },
                 VolumeMounts = gitCloneMounts, SecurityContext = ContainerSecurity()

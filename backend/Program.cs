@@ -46,8 +46,11 @@ builder.Services.AddControllers().AddJsonOptions(o =>
     o.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 builder.Services.AddSingleton<ISessionService, KubernetesSessionService>();
 builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileRegistry, AgentHub.Api.Files.PostgresSessionFileRegistry>();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddSingleton<IExecutionFence, PostgresExecutionFence>();
 builder.Services.AddSingleton<AgentHub.Api.Files.IAgentCallbackAuthorizer, AgentHub.Api.Files.AgentCallbackAuthorizer>();
 builder.Services.AddSingleton<AgentHub.Api.Files.IProjectFileAccess, AgentHub.Api.Files.ProjectFileAccess>();
+builder.Services.AddSingleton<AgentHub.Api.Persistence.ISessionWorkspaceStore, AgentHub.Api.Persistence.PostgresSessionWorkspaceStore>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ISessionExecutionStore, AgentHub.Api.Persistence.PostgresSessionExecutionStore>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ISessionStore, AgentHub.Api.Persistence.PostgresSessionStore>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ISessionMessageStore, AgentHub.Api.Persistence.PostgresSessionMessageStore>();
@@ -546,6 +549,7 @@ await AgentHub.Api.Persistence.SchemaMigrationLock.RunAsync(app.Configuration, a
         var store = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISessionStore>();
         await store.InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISessionExecutionStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISessionWorkspaceStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISessionMessageStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Files.ISessionFileRegistry>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Browser.IBrowserLeaseStore>().InitializeAsync();

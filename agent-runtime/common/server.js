@@ -10,7 +10,7 @@ const { LocalFileStore, LocalFileError } = require('../files/local-store');
 const { AttachmentMaterializer } = require('../files/materialize');
 const credentials = require('./credential-install');
 const { injectTerminalInput, formatFleetMessage, INTERRUPT_PAUSE_MS, ESCAPE } = require('./terminal-inject');
-const { createNextTurnDelivery, renderScreen, IDLE_QUIET_MS } = require('./next-turn');
+const { createNextTurnDelivery, isTerminalReply, renderScreen, IDLE_QUIET_MS } = require('./next-turn');
 // How long a typed handover may take to appear in the CLI's transcript. Both CLIs write the
 // user turn when it is submitted, before the model answers.
 const HANDOVER_VERIFY_MS = 10_000;
@@ -223,7 +223,11 @@ function createCommonServer(options = {}) {
   let chatDelivery = Promise.resolve();
   let pendingChatDeliveries = 0;
   let outstandingRuntimeTurns = 0;
-  let runtimeDraining = false;
+  const providerTargetRequest = env.AGENTHUB_PROVIDER_SWITCH_ID || '';
+  let providerSourceRequest = null;
+  let providerTargetReleased = false;
+  let providerPromptUsed = false;
+  let runtimeDraining = Boolean(providerTargetRequest);
   let promptSent = false;
   let firstLaunchedAt = 0;
   let transcriptFile = null;
@@ -294,6 +298,7 @@ function createCommonServer(options = {}) {
     : null;
   // Keys a person sends while a message is being typed in: they go in after its Enter instead of
   // landing in the middle of it.
+  nextTurn?.suspend(runtimeDraining);
   let inputHeldForTyping = [];
   let clearTarget = null;
   // The handover of a context clear not yet seen in the fresh transcript (#336). Inside the state
@@ -1284,6 +1289,9 @@ function createCommonServer(options = {}) {
   }
 
   function startAgent(allowResume) {
+    // A restart may reconcile native state, but must never replay an ambiguously consumed handover.
+    if (providerTargetRequest && providerPromptUsed) env.AGENTHUB_PROMPT = '';
+    if (providerTargetRequest) providerPromptUsed = true;
     activityPromptAt = now();
     activityIdleOverride = false;
     // A question dialog dies with the CLI that drew it; a restarted CLI that kept it open would
@@ -1424,6 +1432,19 @@ function createCommonServer(options = {}) {
       }
       if (exited) return;
       if (runtimeDraining) {
+        // Native startup still needs terminal negotiation and geometry. They carry no prompt
+        // text; blocking them can leave a correctly reserved target unable to draw its input.
+        if (providerTargetRequest || providerSourceRequest) {
+          if (message.type === 'resize' && message.cols > 0 && message.rows > 0) {
+            lastSize = { cols: message.cols, rows: message.rows };
+            signInPrivacy.resize(message.cols, message.rows);
+            try { term?.resize(message.cols, message.rows); } catch {}
+            return;
+          }
+          if (message.type === 'input' && typeof message.data === 'string' && isTerminalReply(message.data)) {
+            term?.write(message.data); return;
+          }
+        }
         safeSend(socket, agenthubEvent('error', { code: 'runtime_updating', clientTurnId: message.clientTurnId }));
         return;
       }
@@ -1915,7 +1936,7 @@ function createCommonServer(options = {}) {
     activityQuestions = event === 'question' ? normalizeQuestions(body.questions) : [];
     if (event === 'question') openHubQuestion(activityQuestions);
     else if (event !== 'prompt') closeHubQuestion();
-    const text = event === 'idle' || runtimeDraining || restartReason !== null ? null : await nextTurn.turnEvent(event);
+    const text = event === 'idle' || (runtimeDraining && !providerTargetRequest && !providerSourceRequest) || restartReason !== null ? null : await nextTurn.turnEvent(event);
     publishActivity();
     sendJson(response, 200, text ? { text } : {});
     if (event === 'stop' && !text) setTimeoutImpl(deliverNextTurnIfIdle, IDLE_QUIET_MS + 100);
@@ -2095,15 +2116,77 @@ function createCommonServer(options = {}) {
     return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
   }
 
+  function providerNativeState() {
+    const file = locateTranscript();
+    let nativeId = null, raw = '';
+    if (file) {
+      try {
+        const fd = fs.openSync(file, 'r');
+        try {
+          const bytes = Buffer.alloc(Math.min(fs.statSync(file).size, MAX_BUFFER));
+          const count = fs.readSync(fd, bytes, 0, bytes.length, 0);
+          raw = bytes.subarray(0, count).toString('utf8');
+        } finally { fs.closeSync(fd); }
+        nativeId = raw ? (typeof driver.nativeIdentity === 'function' ? driver.nativeIdentity({ file, env, home, fs }) : require('node:path').basename(file)) : null;
+      } catch { nativeId = null; }
+    }
+    const prompt = env.AGENTHUB_PROMPT || '';
+    return { ready: agentReady && !exited && restartReason === null,
+      nativeId, requestId: providerSourceRequest || (providerTargetReleased ? null : providerTargetRequest), draining: runtimeDraining,
+      markerSeen: Boolean(providerTargetRequest && prompt && raw.includes(JSON.stringify(prompt).slice(1, -1))) };
+  }
+
+  async function handleProviderSwitchRequest(request, response) {
+    if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
+    if (mode !== 'interactive' || chatMode || driver.supportsProviderSwitch !== true)
+      return fileError(response, 400, 'provider_switch_unsupported');
+    if (request.method === 'GET') return sendJson(response, 200, providerNativeState());
+    if (!['POST', 'DELETE'].includes(request.method)) return fileError(response, 405, 'method_not_allowed');
+    const raw = await readBoundedBody(request, 2048);
+    let body; try { body = raw && JSON.parse(raw.toString('utf8')); } catch {}
+    if (!body || !/^[0-9a-f-]{36}$/i.test(body.requestId || '')) return fileError(response, 400, 'invalid_switch_request');
+    if (request.method === 'DELETE') {
+      if ((providerTargetRequest && !providerTargetReleased) || providerSourceRequest !== body.requestId) return fileError(response, 409, 'switch_not_cancellable');
+      providerSourceRequest = null; runtimeDraining = false; nextTurn?.suspend(false); publishActivity();
+      return sendJson(response, 200, { cancelled: true });
+    }
+    if (body.action === 'prepare') {
+      if ((providerTargetRequest && !providerTargetReleased) || (providerSourceRequest && providerSourceRequest !== body.requestId))
+        return fileError(response, 409, 'switch_already_pending');
+      if (!providerSourceRequest) {
+        if (runtimeDraining || !agentReady || exited || restartReason !== null || persisting || activityWaitingFor ||
+            hubQuestionOpen || contextClear?.pending || modQueue.length || deferredMessages.length ||
+            !nextTurn || !await nextTurn.canQuiesce(term, () => scrollback, lastSize))
+          return fileError(response, 409, 'source_not_at_safe_point');
+        if (!statePut || stateWithheld || !providerNativeState().nativeId) return fileError(response, 409, 'source_archive_unavailable');
+        providerSourceRequest = body.requestId; runtimeDraining = true; nextTurn.suspend(true); publishActivity();
+      }
+    } else if (['checkpoint', 'release'].includes(body.action)) {
+      if (body.action === 'release' && providerTargetReleased && providerTargetRequest === body.requestId)
+        return sendJson(response, 200, { ...providerNativeState(), checkpointed: true });
+      const state = providerNativeState();
+      if (providerTargetRequest !== body.requestId || !state.ready || !state.markerSeen ||
+          (body.nativeId && body.nativeId !== state.nativeId)) return fileError(response, 409, 'handover_not_confirmed');
+    } else return fileError(response, 400, 'invalid_switch_action');
+    return persistAll(error => {
+      if (error || stateWithheld) return fileError(response, 503, 'provider_state_upload_failed');
+      if (body.action === 'release') { providerTargetReleased = true; runtimeDraining = false; nextTurn?.suspend(false); publishActivity(); }
+      sendJson(response, 200, { ...providerNativeState(), checkpointed: true });
+    }, true);
+  }
+
   function handleHttpRequest(request, response) {
     const requestPath = (request.url || '').split('?')[0];
     if (requestPath === '/agenthub/diff') return handleDiffRequest(request, response);
     if (requestPath === '/agenthub/commands') return handleCommandsRequest(request, response);
     if (requestPath === '/agenthub/models') return handleModelsRequest(request, response);
     if (requestPath === '/agenthub/attachments') return handleAttachmentRequest(request, response);
+    if (requestPath === '/agenthub/provider-switch') return handleProviderSwitchRequest(request, response)
+      .catch(() => { if (!response.headersSent) fileError(response, 503, 'provider_switch_unavailable'); });
     if (requestPath === '/agenthub/runtime-drain') {
       if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
       if (request.method === 'DELETE') {
+        if (providerSourceRequest || (providerTargetRequest && !providerTargetReleased)) return fileError(response, 409, 'provider_switch_pending');
         runtimeDraining = false;
         return sendJson(response, 200, { draining: false });
       }

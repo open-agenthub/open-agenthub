@@ -13,6 +13,21 @@ namespace AgentHub.Api.Tests;
 public class SessionExecutionTests
 {
     [Fact]
+    public void NativeFloorAdmitsBoundedMultilingualHandoverWithoutOptionalWindowMetadata()
+    {
+        foreach (var agent in new[] { AgentKind.Claude, AgentKind.Codex })
+        {
+            var capacity = ProviderHandoverCapacity.Check(agent, AgentAuthMode.Subscription, new string('界', 16_000), null);
+            Assert.Equal(100_000, capacity.WindowTokens);
+            Assert.Equal(48_000, capacity.InputUpperBound);
+            Assert.Equal("native-minimum", capacity.Source);
+            Assert.Throws<InvalidOperationException>(() => ProviderHandoverCapacity.Check(agent, AgentAuthMode.Subscription, "task", 1000));
+            Assert.Throws<InvalidOperationException>(() => ProviderHandoverCapacity.Check(agent, AgentAuthMode.CustomEndpoint, "task", null));
+            Assert.Equal("reported", ProviderHandoverCapacity.Check(agent, AgentAuthMode.CustomEndpoint, "task", 200_000).Source);
+        }
+    }
+
+    [Fact]
     public void PreviewRetainsInstructionsReferencesAndReportsUnknownCapacity()
     {
         var result = HandoverPreviewBuilder.Build(new(AgentKind.Codex, "/keep instructions verbatim", "finish work",

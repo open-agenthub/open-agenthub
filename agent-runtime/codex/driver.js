@@ -232,6 +232,9 @@ function resetFromJson(match, text, { secondsFromNow }) {
 }
 
 module.exports = {
+  supportsProviderSwitch: true,
+  nativeIdentity: ({ file, env, fs: fileSystem }) => rememberedThreadId(env, fileSystem) ||
+    (/-([0-9a-f-]{36})\.jsonl$/i.exec(path.basename(file)) || [])[1] || path.basename(file),
   modelCatalog: require('./model-catalog'),
   failedTurnEnded: require('./turn-activity').failedTurnEnded,
   // /clear, not /new: both start a fresh thread and keep the old one resumable, but from 0.165.0

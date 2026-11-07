@@ -1,7 +1,7 @@
 # Persistent workspace for provider replacement
 
-Step 2 decision for #345, after the execution-history foundation in #487. This design
-milestone adds no product code. Runtime switching remains disabled until its lifecycle,
+Step 2 decision for #345, after the execution-history foundation in #487. The first design
+milestone added no product code. Runtime switching remains disabled until its lifecycle,
 policy and recovery proofs pass. See `provider-switching-implementation.md` for the full
 sequence and `provider-switching-history.md` for the existing history contract.
 
@@ -101,3 +101,34 @@ real pinned Claude/Codex through the real transport/backend in both switch direc
 including return, handover ordering, target-only credentials and stale-generation rejection.
 A standalone API server or fake Running pod cannot prove volume persistence or process death.
 Keep default-off gating through step 3 fault/recovery acceptance.
+
+## Native handover capacity floor
+
+Owner clarification for step 2: missing optional window metadata from the pinned native
+Claude/Codex model list must not disable ordinary subscription switching. Use a conservative
+100,000-token minimum only for packaged native Claude/Codex authentication and a model from
+the native account/built-in list (or that CLI's default). A reported model window takes
+precedence, including one below the floor. Custom endpoints have no native minimum and
+must report sufficient capacity or be refused before source stop.
+
+Rationale checked 2026-11-07 against primary provider documentation: the
+[Claude context-window guide](https://platform.claude.com/docs/en/build-with-claude/context-windows)
+describes 200k for the smaller current models and larger windows for others; the
+[Codex model documentation](https://developers.openai.com/api/docs/models/gpt-5.1-codex)
+reports 400,000 for the coding model, while the
+[model catalog](https://developers.openai.com/api/docs/models) includes smaller 128k windows.
+The 100k admission floor is a deliberately lower product guarantee for supported native
+catalog choices, not a claim that every arbitrary model identifier has that window. Revisit
+it with runtime/model support changes. Operator-supplied runtime images must preserve that
+native contract; custom model endpoints use their reported limit instead.
+
+Keep the complete handover at most 16,000 UTF-16 characters including framing and the
+request marker. Use UTF-8 byte count as a conservative input-token upper bound, plus 32,768
+tokens of safety margin for native framing/tools/output. Do not use a four-characters-per-token
+assumption for multilingual text. This budget does not grant tools or remove the CLI's own
+admission/compaction checks; excessive external tool descriptions can still make a native
+request fail, which must remain a visible recoverable handover failure rather than a
+silent truncation or automatic replay. Prove native admission without capacity metadata
+against the real pinned CLIs and a recording model; custom unknown/small limits remain
+negative cases. A universal unknown-window rejection was rejected because native probes
+currently omit that optional field and would make the owner's requested case unusable.
