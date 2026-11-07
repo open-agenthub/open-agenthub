@@ -13,6 +13,10 @@ on:
     - cron: "23 3 * * *"
   workflow_dispatch:
     inputs:
+      prove_workspace_pvc:
+        description: "Prove persistent session workspace mounts and pause/resume on real kubelet"
+        type: boolean
+        default: false
       prove_postgres_startup:
         description: "Capture bundled database first-start termination and signal permissions"
         type: boolean
@@ -138,6 +142,10 @@ jobs:
           RELEASE_NAMESPACE: agenthub
           SESSIONS_NAMESPACE: agenthub-sessions
         run: bash tests/ObjectStorageEgressProof/prove.sh
+
+      - name: Prove persistent session workspace
+        if: github.event_name == 'workflow_dispatch' && inputs.prove_workspace_pvc
+        run: bash tests/ProviderWorkspaceProof/prove.sh
 
       - name: Upgrade in place keeps the release healthy
         env:
