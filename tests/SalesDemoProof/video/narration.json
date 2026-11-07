@@ -1,0 +1,52 @@
+{
+  "voice": "af_heart",
+  "note": "Frozen narration for the #481 demo. One entry per scene of demo/demo.mjs, plus title and close cards. Captions are taken from this text, not re-typed.",
+  "scenes": [
+    {
+      "id": "title",
+      "card": true,
+      "text": "Open AgentHub, release 1.19.0. A five-minute tour for a development team: from an issue to a pushed branch, with a colleague taking over. Everything here is synthetic. The model and the Git host are stand-ins, and Enterprise runs on a test licence."
+    },
+    {
+      "id": "signin",
+      "text": "Alice leads the platform team. The company runs its own identity provider, so she signs in there; AgentHub stores no passwords. She was named the first administrator during setup. Nobody else is an admin by default. The hub reads her groups from the same token."
+    },
+    {
+      "id": "admin",
+      "text": "As admin, Alice opens the Enterprise settings. The licence card shows the test key used for this demo. Groups come straight from the identity provider's token: platform becomes admin, developers and reviewers become users. The developers group gets a monthly API budget of fifty dollars. And Alice limits which agents the team may start: Claude, Codex and OpenCode. None of this needs a redeploy or a restart."
+    },
+    {
+      "id": "project",
+      "text": "Work is organised in projects. Alice creates one for the invoice service and shares it with Carol from review, as a viewer. Carol can follow every session in this project, read-only. Sessions started in the project are shared the same way."
+    },
+    {
+      "id": "session",
+      "text": "Issue forty-two: invoice totals are one cent short. Alice hands it to an agent: Claude Code on the team's own model endpoint, working on the invoice-service repository, in a pod on the team's own cluster. Before the agent runs a shell command, Alice is asked. She allows it, and tells the hub not to ask again in this session. The agent creates a branch, fixes the rounding, runs the tests and pushes fix slash forty-two rounding. The branch is on the Git host, ready for review. The conversation shows every tool call with its output, and the agent's own terminal is one click away."
+    },
+    {
+      "id": "share",
+      "text": "Alice has to leave, so she shares the running session with Bob, as a collaborator. For a quick look from outside the team she also creates a read-only link. It is shown once, and should be treated like a secret. Bob gets the same live view and can type into the session. Settings and sharing stay with the owner."
+    },
+    {
+      "id": "link",
+      "text": "Whoever has the link sees the live session, read-only, without an account. When it is no longer needed, Alice revokes it, and the same address stops working at once. A link can also be given an expiry date; here Alice revokes it by hand."
+    },
+    {
+      "id": "takeover",
+      "text": "Bob signs in with his own account. The session is under Shared with me, still running. He picks up where Alice stopped and asks for a regression test. The agent still has the whole conversation, adds the test and pushes it to the same branch. Tool approvals stay with the owner; Alice had already allowed shell commands. Nothing was restarted: the pod, the branch and the conversation are the same."
+    },
+    {
+      "id": "model",
+      "text": "For the summary, Bob wants a different model. He switches the running session from the fast model to the deep one, between turns, without a restart. The next answer comes from the new model, with the earlier turns still in its context. Every answer from the stand-in carries the name of the model that produced it, so the switch is visible."
+    },
+    {
+      "id": "limits",
+      "text": "Bob is a developer, not an admin. When he starts a new session he sees only the agents Alice allowed, and his spending counts against the developers' budget on the Usage page. Admins can change these limits at any time, without a redeploy."
+    },
+    {
+      "id": "close",
+      "card": true,
+      "text": "This instance was set up with the one-line quickstart, then a hostname, TLS and single sign-on from one values file. On a slow emulated machine the install took under six minutes and the switch to team login about two, plus two setup gaps we found on the way. The evaluation checklist lists every step, the measured times, those gaps and the known limits. The next step: a technical check of your setup against this checklist, then a start with guided onboarding."
+    }
+  ]
+}
