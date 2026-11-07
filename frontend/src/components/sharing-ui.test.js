@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import ProjectSidebar from './ProjectSidebar.vue'
 import ShareSessionDialog from './ShareSessionDialog.vue'
 import SharedSessionView from './SharedSessionView.vue'
@@ -24,6 +24,10 @@ vi.mock('../api.js', () => ({
   api: apiMocks.api,
   getSharedSession: apiMocks.getSharedSession
 }))
+
+// The share dialogs debounce their lookups by 250 ms and the shared page polls every 2 s; a
+// wrapper left mounted keeps those running into the next test, after its mocks were cleared (#518).
+enableAutoUnmount(afterEach)
 
 describe('shared-session UI', () => {
   beforeEach(() => {
