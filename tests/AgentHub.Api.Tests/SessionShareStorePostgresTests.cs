@@ -12,6 +12,21 @@ namespace AgentHub.Api.Tests;
 public class SessionShareStorePostgresTests
 {
     [PostgreSqlFact]
+    public async Task SharedMetadataTracksProviderGenerationAndPendingInputWithoutChangingAccess()
+    {
+        await using var database = await PostgresSharingDatabase.CreateAsync();
+        await database.AddSessionAsync("alice", "s"); await database.AddUserAsync("bob");
+        await database.Shares.UpsertDirectAsync("alice", "s", "bob", ShareRole.Collaborator);
+        await using var connection = new NpgsqlConnection(database.Configuration.GetConnectionString("Postgres")); await connection.OpenAsync();
+        await using (var change = new NpgsqlCommand("UPDATE sessions SET agent='Codex',execution_generation=1,provider_switch_pending=TRUE WHERE id='s'", connection)) await change.ExecuteNonQueryAsync();
+        var access = await database.Shares.FindUserAccessAsync("bob", "s");
+        Assert.NotNull(access); Assert.Equal(ShareRole.Collaborator, access.Role);
+        var view = SharedSessionSanitizer.Sanitize(new(access.Session, SessionAccessLevel.Collaborator, "alice"));
+        Assert.Equal(AgentKind.Codex, view.Agent); Assert.Equal(1, view.ExecutionGeneration); Assert.True(view.ProviderSwitchPending);
+        Assert.True(view.CanWrite); Assert.False(view.CanManage); Assert.False(view.CanShell);
+    }
+
+    [PostgreSqlFact]
     public async Task CrossOwnerMutations_AreRejected()
     {
         await using var database = await PostgresSharingDatabase.CreateAsync();

@@ -101,6 +101,7 @@ function createNextTurnDelivery(options) {
   let lastOutput = 0;
   let chained = 0;
   // A message the hub said this pod would deliver and nothing has taken yet.
+  let paused = false;
   let pending = false;
   // Taken from the hub but not handed over: the person started typing between the take and the
   // typing. They go out with the next Stop, ahead of anything newer.
@@ -164,6 +165,7 @@ function createNextTurnDelivery(options) {
       return null;
     }
     if (event !== 'stop') return null;
+    if (paused) { state = 'idle'; return null; }
     // A self-clear must finish the current turn, rather than continue it with peer messages.
     // Those messages stay in the inbox until the handover starts the new conversation.
     if (actions.length) { chained = 0; state = 'idle'; return null; }
@@ -190,6 +192,7 @@ function createNextTurnDelivery(options) {
   }
 
   function idleReason(term, screenSize, { unknownIsIdle = false, ignoreDraft = false } = {}) {
+    if (paused) return 'reserved';
     if (!term) return 'no_terminal';
     // A handover saved by an earlier run waits for the restarted CLI, which reports no turn until
     // someone types: 'unknown' with quiet output is a CLI waiting at its prompt (#336).
@@ -351,6 +354,12 @@ function createNextTurnDelivery(options) {
     /** A plain message the hub will hear "next-turn" for. */
     accept() { pending = true; },
     turnEvent,
+    suspend(value) { paused = value === true; },
+    async canQuiesce(term, scrollback, screenSize) {
+      if (held.length || actions.length || idleReason(term, screenSize)) return false;
+      const screen = await renderScreen(scrollback(), screenSize, Terminal());
+      return !detectMenu(screen) && !held.length && !actions.length && !idleReason(term, screenSize);
+    },
     scheduleAtSafePoint(action, { atStart = false, ignoreDraft = false } = {}) { actions.push({ action, atStart, ignoreDraft }); },
     async waitForInputReady(term, scrollback, screenSize, isReady = () => true) {
       const deadline = now() + 15_000;

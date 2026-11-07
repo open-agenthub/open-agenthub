@@ -1,5 +1,6 @@
 using System.Net;
 using AgentHub.Api.Browser;
+using AgentHub.Api.Persistence;
 
 namespace AgentHub.Api.Services;
 
@@ -47,6 +48,9 @@ public sealed class AgentPodRequests : IAgentPodRequests
     // hold the caller's request for its whole timeout.
     private static readonly TimeSpan ConfirmTimeout = TimeSpan.FromSeconds(5);
 
+    private readonly IHttpContextAccessor? _context;
+    private readonly IExecutionFence? _fence;
+    private readonly ISessionStore? _sessions;
     private readonly HttpClient _http;
     private readonly IAgentPodIdentityResolver _pods;
 
@@ -54,8 +58,9 @@ public sealed class AgentPodRequests : IAgentPodRequests
     /// <param name="http">Must not follow redirects: a pod answering 307 to another address would
     /// otherwise get the token sent on to it, past the check. <see cref="AddAgentPodRequests"/>
     /// registers it that way.</param>
-    public AgentPodRequests(HttpClient http, IAgentPodIdentityResolver pods)
+    public AgentPodRequests(HttpClient http, IAgentPodIdentityResolver pods, IExecutionFence? fence = null, ISessionStore? sessions = null, IHttpContextAccessor? context = null)
     {
+        _context = context; _fence = fence; _sessions = sessions;
         _http = http;
         _pods = pods;
         // Each call brings its own bound; the client's own would cut the longest of them short.
@@ -65,6 +70,19 @@ public sealed class AgentPodRequests : IAgentPodRequests
     public async Task<HttpResponseMessage> SendAsync(string sessionId, HttpRequestMessage request,
         HttpCompletionOption completion, TimeSpan timeout, CancellationToken ct)
     {
+        var record = _sessions is null ? null : await _sessions.GetByIdAsync(sessionId, ct);
+        // A forwarded callback already holds this read lease; nesting another pool lease can
+        // exhaust the lock pool while every callback waits for its own outbound request.
+        var alreadyFenced = _context?.HttpContext?.Items.ContainsKey("agenthub.execution-fence:" + sessionId) == true;
+        await using var lease = record?.WorkspacePersistent == true && _fence is not null && !alreadyFenced
+            ? await _fence.ReadAsync(sessionId, ct) : null;
+        if (record?.WorkspacePersistent == true)
+        {
+            var current = await _sessions!.GetByIdAsync(sessionId, ct);
+            var token = request.Headers.TryGetValues("X-Agent-Token", out var values) ? values.SingleOrDefault() : null;
+            if (current is null || token != current.CallbackToken)
+                throw new AgentPodNotConfirmedException("The request belongs to a retired execution.");
+        }
         if (request.RequestUri is not { IsAbsoluteUri: true } uri)
             throw new AgentPodNotConfirmedException("The pod address is not an IP address.");
         await ConfirmAsync(sessionId, uri.IdnHost, ct);

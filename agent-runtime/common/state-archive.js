@@ -26,8 +26,9 @@ function stateExcludes(driver) {
   return [...new Set([...excludes, ...temporary])];
 }
 
-// A digest over the name, type, size, mtime and ctime of everything the archive would contain,
-// without opening a single file. The timestamps are printed at the filesystem's full
+// A digest over the name, type, mode, size, mtime and ctime of everything the archive would contain,
+// without opening a single file. Mode is explicit because two metadata changes can share
+// a coarse filesystem ctime. The timestamps are printed at the filesystem's full
 // resolution: tar's own verbose listing rounds to the second, and a file rewritten to the same
 // size within the second of the previous run — an SQLite database does exactly that — would
 // then look unchanged for good. find anchors a pattern that tar matches anywhere in the path,
@@ -38,7 +39,7 @@ function stateExcludes(driver) {
 function signatureScript(driver) {
   const prune = stateExcludes(driver).map(entry => '-path "' + entry + '"').join(' -o ');
   return '{ timeout ' + PERSIST_STEP_SECONDS + ' find "' + driver.stateDir +
-    '" \\( ' + prune + " \\) -prune -o -printf '%T@ %C@ %s %y %p\\n'; echo \"exit $?\"; } 2>&1 | " +
+    '" \\( ' + prune + " \\) -prune -o -printf '%m %T@ %C@ %s %y %p\\n'; echo \"exit $?\"; } 2>&1 | " +
     'LC_ALL=C sort | sha256sum';
 }
 

@@ -1,4 +1,5 @@
 using AgentHub.Api.Otel;
+using AgentHub.Api.Files;
 using AgentHub.Api.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -13,12 +14,14 @@ namespace AgentHub.Api.Controllers;
 [Route("internal/otel")]
 public sealed class OtelController : ControllerBase
 {
+    private readonly IAgentCallbackAuthorizer? _executionAuthority;
     private readonly IUsageStore _usage;
     private readonly ISessionStore _sessions;
     private readonly ILogger<OtelController> _log;
 
-    public OtelController(IUsageStore usage, ILogger<OtelController> log, ISessionStore sessions)
+    public OtelController(IUsageStore usage, ILogger<OtelController> log, ISessionStore sessions, IAgentCallbackAuthorizer? executionAuthority = null)
     {
+        _executionAuthority = executionAuthority;
         _usage = usage;
         _sessions = sessions;
         _log = log;
@@ -35,6 +38,11 @@ public sealed class OtelController : ControllerBase
             return Unauthorized();
         var session = await _sessions.GetByCallbackTokenAsync(token!, ct);
         if (session is null) return Unauthorized();
+        if (_executionAuthority is not null)
+        {
+            session = await _executionAuthority.AuthorizeAsync(Request, session.Id, ct);
+            if (session is null) return Unauthorized();
+        }
 
         // Read the raw protobuf body (capped to protect against oversized payloads).
         using var ms = new MemoryStream();

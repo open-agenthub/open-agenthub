@@ -6,6 +6,9 @@ namespace AgentHub.Api.Persistence;
 /// <summary>Persistent session record (registry/status). The actual Claude state lives in S3.</summary>
 public sealed class SessionRecord
 {
+    public long ExecutionGeneration { get; set; }
+    public bool ProviderSwitchPending { get; set; }
+    public bool WorkspacePersistent { get; set; }
     public required string Id { get; init; }
     public required string Owner { get; init; }
     public string Title { get; set; } = "";
@@ -59,7 +62,7 @@ public sealed class SessionRecord
     public string? AgentPolicyJson { get; set; }
     public string? AllowedToolsJson { get; set; }
     /// <summary>Agent session ID assigned by us (used for --resume).</summary>
-    public string AgentSessionId { get; init; } = "";
+    public string AgentSessionId { get; set; } = "";
     /// <summary>Legacy compatibility input; not used by application mappings.</summary>
     public string? ClaudeSessionId { get; init; }
     /// <summary>Pending | Running | Succeeded | Failed | Scheduled.</summary>
@@ -100,7 +103,7 @@ public sealed class SessionRecord
     /// (RepoUrl mirrors the first entry for display and backward compatibility.)</summary>
     public string? ReposJson { get; set; }
     /// <summary>Token the agent pod uses to authenticate against the internal callback.</summary>
-    public required string CallbackToken { get; init; }
+    public required string CallbackToken { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     /// <summary>Seconds until the session deletes itself; null = never (docs/session-expiry.md).</summary>
@@ -215,6 +218,9 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS project_id TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS prompt TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS allowed_tools TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS execution_generation BIGINT NOT NULL DEFAULT 0;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS provider_switch_pending BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS workspace_persistent BOOLEAN NOT NULL DEFAULT FALSE;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS agent TEXT NOT NULL DEFAULT 'Claude';
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS auth_mode TEXT NOT NULL DEFAULT 'Auto';
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS openclaw_api_key_source TEXT;
@@ -472,7 +478,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids, resolved_credential_id, account_failover, failure_reason, secret_ids, auto_update_runtime_images, secret_grant_ids, secret_ceiling, model_endpoint_url, model_name, cpu_limit, memory_limit, question_open, question_title FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids, resolved_credential_id, account_failover, failure_reason, secret_ids, auto_update_runtime_images, secret_grant_ids, secret_ceiling, model_endpoint_url, model_name, cpu_limit, memory_limit, question_open, question_title, execution_generation, provider_switch_pending, workspace_persistent FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -585,6 +591,7 @@ public sealed class PostgresSessionStore : ISessionStore
         CpuLimit = r.IsDBNull(46) ? null : r.GetString(46),
         MemoryLimit = r.IsDBNull(47) ? null : r.GetString(47),
         QuestionOpen = r.GetBoolean(48),
-        QuestionTitle = r.IsDBNull(49) ? null : r.GetString(49)
+        QuestionTitle = r.IsDBNull(49) ? null : r.GetString(49),
+        ExecutionGeneration = r.GetInt64(50), ProviderSwitchPending = r.GetBoolean(51), WorkspacePersistent = r.GetBoolean(52)
     };
 }

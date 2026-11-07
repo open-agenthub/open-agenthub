@@ -216,6 +216,7 @@ function createCommonServer(options = {}) {
   let scrollback = '';
   let scrollbackDirectory = null;
   const clients = new Set();
+  const providerShells = new Set();
   let exited = false;
   let term;
   let chat;
@@ -228,7 +229,13 @@ function createCommonServer(options = {}) {
   let chatDelivery = Promise.resolve();
   let pendingChatDeliveries = 0;
   let outstandingRuntimeTurns = 0;
-  let runtimeDraining = false;
+  const providerTargetRequest = env.AGENTHUB_PROVIDER_SWITCH_ID || '';
+  let providerSourceRequest = null;
+  let providerStopping = false, providerNativeStopped = false, providerStopPromise = null;
+  const providerExitWaiters = new Set();
+  let providerTargetReleased = false;
+  let providerPromptUsed = false;
+  let runtimeDraining = Boolean(providerTargetRequest);
   let promptSent = false;
   let firstLaunchedAt = 0;
   let transcriptFile = null;
@@ -299,6 +306,7 @@ function createCommonServer(options = {}) {
     : null;
   // Keys a person sends while a message is being typed in: they go in after its Enter instead of
   // landing in the middle of it.
+  nextTurn?.suspend(runtimeDraining);
   let inputHeldForTyping = [];
   let clearTarget = null;
   // A model switch in progress (#478), and the listeners that see the CLI's output while it waits
@@ -1055,21 +1063,23 @@ function createCommonServer(options = {}) {
   // The body is rebuilt here from a fixed list of numeric fields, whatever the driver returned:
   // the files it reads hold the whole conversation, and none of it may reach the hub this way.
   let lastUsageReport = '';
-  function postUsage(done) {
+  function postUsage(done, required = false) {
     if (!callback || !token || typeof driver.readUsage !== 'function') return done();
     let totals = null;
     try { totals = driver.readUsage({ env, home, fs }); } catch (error) {
       console.log('[agent] Usage not read: ' + (error && error.message ? error.message : error));
+      if (required) return done(new Error('native_usage_unavailable'));
     }
-    if (!totals || typeof totals !== 'object') return done();
+    if (!totals || typeof totals !== 'object') return done(required ? new Error('native_usage_unavailable') : undefined);
     const body = JSON.stringify(usageReportBody(totals));
     if (body === lastUsageReport) return done();
+    let failure = null;
     fetchImpl(callback + '/usage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Agent-Token': token },
       body
-    }).then(response => { if (response && response.ok) lastUsageReport = body; })
-      .catch(() => {}).finally(() => done());
+    }).then(response => { if (response && response.ok) lastUsageReport = body; else if (required) failure = new Error('native_usage_not_acknowledged'); })
+      .catch(() => { if (required) failure = new Error('native_usage_not_acknowledged'); }).finally(() => done(failure));
   }
 
   function postStatus(status, done) {
@@ -1162,6 +1172,12 @@ function createCommonServer(options = {}) {
   }
 
   function handleAgentExit(exitCode, signal) {
+    if (providerStopping) {
+      exited = true; providerNativeStopped = true;
+      for (const resolve of providerExitWaiters) resolve();
+      providerExitWaiters.clear(); publishActivity();
+      return;
+    }
     if (restartReason !== null) {
       const message = restartMessage(restartReason);
       restartReason = null;
@@ -1309,6 +1325,9 @@ function createCommonServer(options = {}) {
   }
 
   function startAgent(allowResume) {
+    // A restart may reconcile native state, but must never replay an ambiguously consumed handover.
+    if (providerTargetRequest && providerPromptUsed) env.AGENTHUB_PROMPT = '';
+    if (providerTargetRequest) providerPromptUsed = true;
     activityPromptAt = now();
     activityIdleOverride = false;
     // A question dialog dies with the CLI that drew it; a restarted CLI that kept it open would
@@ -1450,6 +1469,19 @@ function createCommonServer(options = {}) {
       }
       if (exited) return;
       if (runtimeDraining) {
+        // Native startup still needs terminal negotiation and geometry. They carry no prompt
+        // text; blocking them can leave a correctly reserved target unable to draw its input.
+        if (providerTargetRequest || providerSourceRequest) {
+          if (message.type === 'resize' && message.cols > 0 && message.rows > 0) {
+            lastSize = { cols: message.cols, rows: message.rows };
+            signInPrivacy.resize(message.cols, message.rows);
+            try { term?.resize(message.cols, message.rows); } catch {}
+            return;
+          }
+          if (message.type === 'input' && typeof message.data === 'string' && isTerminalReply(message.data)) {
+            term?.write(message.data); return;
+          }
+        }
         safeSend(socket, agenthubEvent('error', { code: 'runtime_updating', clientTurnId: message.clientTurnId }));
         return;
       }
@@ -1943,7 +1975,7 @@ function createCommonServer(options = {}) {
     activityQuestions = event === 'question' ? normalizeQuestions(body.questions) : [];
     if (event === 'question') openHubQuestion(activityQuestions);
     else if (event !== 'prompt') closeHubQuestion();
-    const text = event === 'idle' || runtimeDraining || restartReason !== null ? null : await nextTurn.turnEvent(event);
+    const text = event === 'idle' || (runtimeDraining && !providerTargetRequest && !providerSourceRequest) || restartReason !== null ? null : await nextTurn.turnEvent(event);
     publishActivity();
     sendJson(response, 200, text ? { text } : {});
     if (event === 'stop' && !text) setTimeoutImpl(deliverNextTurnIfIdle, IDLE_QUIET_MS + 100);
@@ -2261,15 +2293,123 @@ function createCommonServer(options = {}) {
     return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
   }
 
+  function providerNativeState() {
+    const file = locateTranscript();
+    let nativeId = null, raw = '';
+    if (file) {
+      try {
+        const fd = fs.openSync(file, 'r');
+        try {
+          const bytes = Buffer.alloc(Math.min(fs.statSync(file).size, MAX_BUFFER));
+          const count = fs.readSync(fd, bytes, 0, bytes.length, 0);
+          raw = bytes.subarray(0, count).toString('utf8');
+        } finally { fs.closeSync(fd); }
+        nativeId = raw ? (typeof driver.nativeIdentity === 'function' ? driver.nativeIdentity({ file, env, home, fs }) : require('node:path').basename(file)) : null;
+      } catch { nativeId = null; }
+    }
+    const prompt = env.AGENTHUB_PROMPT || '';
+    return { ready: agentReady && !exited && restartReason === null,
+      nativeId, requestId: providerSourceRequest || (providerTargetReleased ? null : providerTargetRequest), draining: runtimeDraining,
+      stopped: providerNativeStopped, markerSeen: Boolean(providerTargetRequest && prompt && raw.includes(JSON.stringify(prompt).slice(1, -1))) };
+  }
+
+  async function handleProviderSwitchRequest(request, response) {
+    if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
+    if (mode !== 'interactive' || chatMode || driver.supportsProviderSwitch !== true)
+      return fileError(response, 400, 'provider_switch_unsupported');
+    if (request.method === 'GET') return sendJson(response, 200, providerNativeState());
+    if (!['POST', 'DELETE'].includes(request.method)) return fileError(response, 405, 'method_not_allowed');
+    const raw = await readBoundedBody(request, 2048);
+    let body; try { body = raw && JSON.parse(raw.toString('utf8')); } catch {}
+    if (!body || !/^[0-9a-f-]{36}$/i.test(body.requestId || '')) return fileError(response, 400, 'invalid_switch_request');
+    if (request.method === 'DELETE') {
+      if (providerStopping || (providerTargetRequest && !providerTargetReleased) ||
+          (providerSourceRequest && providerSourceRequest !== body.requestId) || (runtimeDraining && !providerSourceRequest))
+        return fileError(response, 409, 'switch_not_cancellable');
+      providerSourceRequest = null; runtimeDraining = false; nextTurn?.suspend(false); nextTurn?.accept(); publishActivity();
+      return sendJson(response, 200, { cancelled: true });
+    }
+    if (body.action === 'stop') {
+      if (providerSourceRequest !== body.requestId || !Array.isArray(driver.providerSwitchExitKeys))
+        return fileError(response, 409, 'source_stop_not_reserved');
+      if (!providerStopPromise) {
+        providerStopPromise = (async () => {
+          if (!providerStopping) {
+            providerStopping = true;
+            // The native quit path runs CLI cleanup/exporters before the pod is removed.
+            // There is deliberately no force kill or replay of an uncertain stop request.
+            for (const keys of driver.providerSwitchExitKeys) {
+              term.write(keys);
+              // Separate text from Enter so native paste detection cannot swallow submission.
+              await new Promise(resolve => setTimeoutImpl(resolve, 150));
+            }
+          }
+          if (!providerNativeStopped) await new Promise((resolve, reject) => {
+            let timer;
+            const finish = () => { clearTimeoutImpl(timer); resolve(); };
+            timer = setTimeoutImpl(() => { providerExitWaiters.delete(finish); reject(new Error('source_stop_unconfirmed')); }, 45_000);
+            providerExitWaiters.add(finish);
+          });
+          await new Promise(resolve => flushCredentialWatcher(resolve));
+          await new Promise((resolve, reject) => persistAll(error => error ? reject(error) : resolve(), true));
+          await new Promise((resolve, reject) => postUsage(error => error ? reject(error) : resolve(), true));
+        })().catch(error => { providerStopPromise = null; throw error; });
+      }
+      try { await providerStopPromise; }
+      catch { return fileError(response, 503, 'source_stop_unconfirmed'); }
+      return sendJson(response, 200, { ...providerNativeState(), checkpointed: true });
+    }
+    if (body.action === 'prepare') {
+      if ((providerTargetRequest && !providerTargetReleased) || (providerSourceRequest && providerSourceRequest !== body.requestId))
+        return fileError(response, 409, 'switch_already_pending');
+      if (!providerSourceRequest) {
+        if (runtimeDraining || modelSwitching || providerShells.size || !agentReady || exited || restartReason !== null || persisting || activityWaitingFor ||
+            hubQuestionOpen || contextClear?.pending || modQueue.length || deferredMessages.length ||
+            !nextTurn || !await nextTurn.canQuiesce(term, () => scrollback, lastSize)) {
+          // Record guard state, never draft text or native screen contents, for held operations.
+          console.log('[agent] Provider source safe point held: ' + JSON.stringify({
+            draining: runtimeDraining, modelSwitching, shells: providerShells.size, ready: agentReady,
+            exited, restarting: restartReason !== null, persisting, waitingFor: activityWaitingFor,
+            question: hubQuestionOpen, contextClear: Boolean(contextClear?.pending),
+            modMessages: modQueue.length, deferredMessages: deferredMessages.length,
+            input: nextTurn?.inputBlocker(term, lastSize) ?? 'no_next_turn'
+          }));
+          return fileError(response, 409, 'source_not_at_safe_point');
+        }
+        // Rendering yields: another maintenance request may have reserved the terminal meanwhile.
+        if (runtimeDraining || modelSwitching || providerShells.size || providerSourceRequest || contextClear?.pending)
+          return fileError(response, 409, 'source_not_at_safe_point');
+        if (!statePut || stateWithheld || !providerNativeState().nativeId) return fileError(response, 409, 'source_archive_unavailable');
+        providerSourceRequest = body.requestId; runtimeDraining = true; nextTurn.suspend(true); publishActivity();
+      }
+    } else if (['checkpoint', 'release'].includes(body.action)) {
+      if (body.action === 'release' && providerTargetReleased && providerTargetRequest === body.requestId) {
+        if (!providerSourceRequest) nextTurn?.accept();
+        return sendJson(response, 200, { ...providerNativeState(), checkpointed: true });
+      }
+      const state = providerNativeState();
+      if (!statePut || stateWithheld || providerTargetRequest !== body.requestId || !state.ready || !state.nativeId || !state.markerSeen ||
+          (body.nativeId && body.nativeId !== state.nativeId)) return fileError(response, 409, 'handover_not_confirmed');
+    } else return fileError(response, 400, 'invalid_switch_action');
+    return persistAll(error => {
+      if (error || stateWithheld) return fileError(response, 503, 'provider_state_upload_failed');
+      if (body.action === 'release') { providerTargetReleased = true; runtimeDraining = false; nextTurn?.suspend(false); nextTurn?.accept(); publishActivity(); }
+      sendJson(response, 200, { ...providerNativeState(), checkpointed: true });
+    }, true);
+  }
+
   function handleHttpRequest(request, response) {
     const requestPath = (request.url || '').split('?')[0];
     if (requestPath === '/agenthub/diff') return handleDiffRequest(request, response);
     if (requestPath === '/agenthub/commands') return handleCommandsRequest(request, response);
     if (requestPath === '/agenthub/models') return handleModelsRequest(request, response);
     if (requestPath === '/agenthub/attachments') return handleAttachmentRequest(request, response);
+    if (requestPath === '/agenthub/provider-switch') return handleProviderSwitchRequest(request, response)
+      .catch(() => { if (!response.headersSent) fileError(response, 503, 'provider_switch_unavailable'); });
     if (requestPath === '/agenthub/runtime-drain') {
       if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
       if (request.method === 'DELETE') {
+        if (providerSourceRequest || (providerTargetRequest && !providerTargetReleased)) return fileError(response, 409, 'provider_switch_pending');
         runtimeDraining = false;
         return sendJson(response, 200, { draining: false });
       }
@@ -2408,12 +2548,19 @@ function createCommonServer(options = {}) {
   }
 
   function handleShell(socket) {
+    if (providerSourceRequest || (providerTargetRequest && !providerTargetReleased)) {
+      safeSend(socket, '\r\n[agent] Provider replacement is pending; shell input is reserved.\r\n');
+      try { socket.close(1013); } catch {}
+      return;
+    }
+    providerShells.add(socket);
     let shell;
     try {
       shell = pty.spawn('bash', ['-l'], {
         name: 'xterm-256color', cols: 120, rows: 32, cwd, env
       });
     } catch (error) {
+      providerShells.delete(socket);
       safeSend(socket, '\r\n[agent] Failed to start shell: ' + (error && error.message) + '\r\n');
       try { socket.close(1011); } catch {}
       return;
@@ -2430,7 +2577,7 @@ function createCommonServer(options = {}) {
         try { shell.resize(message.cols, message.rows); } catch {}
       }
     });
-    const cleanup = () => { try { shell.kill(); } catch {} };
+    const cleanup = () => { providerShells.delete(socket); try { shell.kill(); } catch {} };
     socket.on('close', cleanup);
     socket.on('error', cleanup);
   }

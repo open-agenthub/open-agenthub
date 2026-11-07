@@ -81,7 +81,7 @@ public interface ISessionModelSwitch
 }
 
 public sealed class SessionModelSwitch(IAgentPodRequests pods, ISessionService sessions, ISessionStore store,
-    IConfiguration configuration, ILogger<SessionModelSwitch>? log = null) : ISessionModelSwitch
+    IConfiguration configuration, ILogger<SessionModelSwitch>? log = null, ISessionExpiryLock? lifecycle = null) : ISessionModelSwitch
 {
     // The pod waits up to 15 s for the CLI's confirmation after typing, and up to 5 s for the safe
     // point; OpenCode's picker adds its own few seconds. Its answer has to arrive before this.
@@ -89,6 +89,10 @@ public sealed class SessionModelSwitch(IAgentPodRequests pods, ISessionService s
 
     public async Task<ModelSwitchOutcome> SwitchAsync(SessionRecord session, string? model, CancellationToken ct)
     {
+        await using var held = lifecycle is null ? null : await lifecycle.TryAcquireAsync(session.Id, ct);
+        if (lifecycle is not null && held is null) throw new ModelSwitchRefusedException(409, "session_maintenance_pending");
+        if (lifecycle is not null) session = await store.GetByIdAsync(session.Id, ct) ?? throw new ModelSwitchRefusedException(409, "session_not_found");
+        if (session.ProviderSwitchPending) throw new ModelSwitchRefusedException(409, "provider_switch_pending");
         model = model?.Trim();
         if (string.IsNullOrEmpty(model) || !AgentConfiguration.IsValidModelName(model))
             throw new ModelSwitchRefusedException(400, "invalid_model");

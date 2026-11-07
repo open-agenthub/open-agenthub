@@ -25,6 +25,8 @@ namespace AgentHub.Api.Controllers;
 [Route("internal/sessions/{id}")]
 public sealed class InternalController : ControllerBase
 {
+    private readonly IProviderSwitchStore? _providerSwitches;
+    private readonly ISessionExecutionStore? _executions;
     private readonly ISessionStore _store;
     private readonly IEnumerable<INotifier> _notifiers;
     private readonly ISessionService _svc;
@@ -57,8 +59,10 @@ public sealed class InternalController : ControllerBase
         ISessionMessageDelivery? delivery = null, IAccountFailover? accountFailover = null,
         IClaudeLoginSync? loginSync = null, ISecretRequestStore? secretRequests = null,
         ISessionContextClear? contextClear = null, ISessionAccessService? access = null, ISessionSharingService? sharing = null,
-        ISessionModelCatalogs? modelCatalogs = null)
+        ISessionModelCatalogs? modelCatalogs = null, ISessionExecutionStore? executions = null, IProviderSwitchStore? providerSwitches = null)
     {
+        _providerSwitches = providerSwitches;
+        _executions = executions;
         _modelCatalogs = modelCatalogs;
         _contextClear = contextClear;
         _access = access;
@@ -277,7 +281,10 @@ public sealed class InternalController : ControllerBase
         // Claude's tokens already arrive over OTLP; a second source would count them twice.
         if (rec.Agent == AgentKind.Claude) return NoContent();
 
-        await _usage.AddReportedUsageAsync(id, rec.Owner, rec.Agent.ToString().ToLowerInvariant(),
+        if (_usage is IExecutionUsageStore executions)
+            await executions.AddReportedExecutionUsageAsync(id, rec.Owner, rec.ExecutionGeneration,
+                rec.Agent.ToString().ToLowerInvariant(), UsageBilling.Classify(rec.AuthMode.ToString(), null), body, ct);
+        else await _usage.AddReportedUsageAsync(id, rec.Owner, rec.Agent.ToString().ToLowerInvariant(),
             UsageBilling.Classify(rec.AuthMode.ToString(), null), body, ct);
         return NoContent();
     }
@@ -343,7 +350,9 @@ public sealed class InternalController : ControllerBase
         using var reader = new StreamReader(Request.Body);
         var text = await reader.ReadToEndAsync(ct);
         if (text.Length > ScrollbackLimits.MaxChars) text = text[^ScrollbackLimits.MaxChars..];
-        await _store.SetScrollbackAsync(id, text, ct);
+        if (rec.ExecutionGeneration > 0 && _executions is { } executions)
+            await executions.SaveScrollbackAsync(rec.Owner, id, rec.ExecutionGeneration, text, ct);
+        else await _store.SetScrollbackAsync(id, text, ct);
         return NoContent();
     }
 
@@ -361,7 +370,10 @@ public sealed class InternalController : ControllerBase
 
         using var reader = new StreamReader(Request.Body);
         var text = await reader.ReadToEndAsync(ct);
-        await _store.SetTranscriptAsync(id, NativeTranscript.TrimToLineCap(text, ScrollbackLimits.MaxChars), ct);
+        var bounded = NativeTranscript.TrimToLineCap(text, Math.Min(ScrollbackLimits.MaxChars, PostgresSessionExecutionStore.MaxHistoryChars));
+        if (rec.ExecutionGeneration > 0 && _executions is { } executions)
+            await executions.SaveTranscriptAsync(rec.Owner, id, rec.ExecutionGeneration, bounded, ct);
+        else await _store.SetTranscriptAsync(id, bounded, ct);
         return NoContent();
     }
 
@@ -1084,6 +1096,10 @@ public sealed class InternalController : ControllerBase
         IReadOnlyList<SessionMessageRecord> taken;
         while (true)
         {
+            var current = await _store.GetByIdAsync(id, ct);
+            if (current?.ProviderSwitchPending == true && (_providerSwitches is null ||
+                !await _providerSwitches.CanConsumeInboxAsync(current.Owner, id, current.ExecutionGeneration, ct)))
+                return Ok(new { messages = Array.Empty<AgentMessageInfo>() });
             taken = await _messages.TakeUndeliveredAsync(id, AgentMessaging.InboxBatchLimit, takenVia, ct);
             if (taken.Count > 0 || DateTime.UtcNow >= deadline) break;
             await Task.Delay(TimeSpan.FromSeconds(1), ct);

@@ -104,6 +104,15 @@ sharing:
   userSuggestionsEnabled: true
 
 agent:
+  workspaceVolume:
+    # One PVC per new supported interactive session; 10Gi is requested per session.
+    # local-path on single-node k3s persists on that node only and is not a backup.
+    # PVCs survive pause/failed switches. Session deletion removes the PVC; a Retain
+    # reclaim policy requires operator cleanup of its backing storage.
+    persistent: false
+    size: 10Gi
+    # Empty uses the cluster's default storage class. Existing claims never change class/size.
+    storageClass: ""
   port: 7681
   gitCloneImage: alpine/git:2.45.2
   # Optional full image references. Empty values preserve image.registry/image.tag

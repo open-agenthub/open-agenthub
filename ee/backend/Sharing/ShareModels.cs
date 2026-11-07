@@ -363,6 +363,9 @@ public sealed record CreatedShareLinkResponse(SessionShareLink Link, string Url)
 
 public sealed record SharedSessionInfo
 {
+    public AgentKind Agent { get; init; }
+    public long ExecutionGeneration { get; init; }
+    public bool ProviderSwitchPending { get; init; }
     public required string Id { get; init; }
     public required string Title { get; init; }
     public required string Owner { get; init; }
@@ -398,7 +401,7 @@ public static class SharedSessionSanitizer
         var session = access.Session;
         return new SharedSessionInfo
         {
-            Id = session.Id,
+            Id = session.Id, Agent = session.Agent, ExecutionGeneration = session.ExecutionGeneration, ProviderSwitchPending = session.ProviderSwitchPending,
             Title = session.Title,
             Owner = session.Owner,
             Mode = session.Mode,

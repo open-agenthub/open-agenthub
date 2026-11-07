@@ -40,6 +40,9 @@ public interface ISessionMessageStore
     /// <see cref="MessageDeliveryVia.NextTurn"/> when the pod takes them to hand over as a turn.</summary>
     Task<IReadOnlyList<SessionMessageRecord>> TakeUndeliveredAsync(string toSessionId, int limit, string via,
         CancellationToken ct = default);
+    /// <summary>Read-only pending snapshot; release uses the acknowledged push path before marking delivery.</summary>
+    Task<IReadOnlyList<SessionMessageRecord>> ReadUndeliveredAsync(string toSessionId, int limit, CancellationToken ct = default)
+        => throw new NotSupportedException();
     /// <summary>Recent messages of the session (newest first), delivered or not — read-only view for the UI.</summary>
     Task<IReadOnlyList<SessionMessageRecord>> ListRecentAsync(string toSessionId, int limit, CancellationToken ct = default);
     /// <summary>Owner-bound history uses a timestamp/id keyset so new arrivals do not shift later pages.</summary>
@@ -147,6 +150,14 @@ public sealed class PostgresSessionMessageStore : ISessionMessageStore
         cmd.Parameters.AddWithValue("via", via);
         var taken = await ReadAllAsync(cmd, ct);
         return taken.OrderBy(m => m.CreatedAt).ToList();
+    }
+
+    public async Task<IReadOnlyList<SessionMessageRecord>> ReadUndeliveredAsync(string toSessionId, int limit, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand($"SELECT {Columns} FROM session_messages WHERE to_session_id=@to AND delivered_at IS NULL ORDER BY created_at,id LIMIT @limit");
+        cmd.Parameters.AddWithValue("to", toSessionId);
+        cmd.Parameters.AddWithValue("limit", Math.Clamp(limit, 1, AgentMessaging.InboxBatchLimit));
+        return await ReadAllAsync(cmd, ct);
     }
 
     public async Task<IReadOnlyList<SessionMessageRecord>> ListRecentAsync(string toSessionId, int limit, CancellationToken ct = default)

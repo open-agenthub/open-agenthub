@@ -23,9 +23,16 @@ namespace AgentHub.Api.Services;
 /// Security: no root, no capabilities, read-only rootfs, dedicated namespace,
 /// the agent pod gets no S3 creds (only presigned URLs) and no K8s token.
 /// </summary>
-public sealed class KubernetesSessionService : ISessionService, IExecutionConversationSource, IProviderLoginRepository, IGitSessionCredentials
+public sealed partial class KubernetesSessionService : ISessionService, IExecutionConversationSource, IProviderLoginRepository, IGitSessionCredentials
 {
+    private readonly ISessionMessageStore? _switchMessages;
+    private readonly SessionMessageDelivery? _switchDelivery;
+    private readonly IExecutionUsageSnapshots? _executionUsage;
+    private readonly IProviderSwitchStore? _providerSwitches;
+    private readonly IModelCatalogStore? _switchCatalogs;
+    private readonly AgentHub.Api.Permissions.PermissionStore? _switchPermissions;
     private readonly ISessionExecutionStore? _executions;
+    private readonly SessionWorkspaceVolumes? _workspaceVolumes;
     private readonly Ee.Sharing.ISessionMcpPolicyReader? _mcpPolicies;
     private readonly Kubernetes _k8s;
     private readonly ISessionExpiryLock? _runtimeUpdateLock;
@@ -76,9 +83,14 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
         ISecretRequestStore? secretRequests = null,
         Kubernetes? cluster = null,
         IAgentPodRequests? podRequests = null,
-        Chat.IChatSessionCleanup? chatCleanup = null, ISessionExecutionStore? executions = null,
+        Chat.IChatSessionCleanup? chatCleanup = null, ISessionExecutionStore? executions = null, ISessionWorkspaceStore? workspaceStore = null,
+        IProviderSwitchStore? providerSwitches = null, IModelCatalogStore? switchCatalogs = null,
+        AgentHub.Api.Permissions.PermissionStore? switchPermissions = null, IExecutionUsageSnapshots? executionUsage = null, ISessionMessageStore? switchMessages = null, SessionMessageDelivery? switchDelivery = null,
         Ee.Sharing.ISessionMcpPolicyReader? mcpPolicies = null)
     {
+        _switchMessages = switchMessages; _switchDelivery = switchDelivery;
+        _executionUsage = executionUsage;
+        _providerSwitches = providerSwitches; _switchCatalogs = switchCatalogs; _switchPermissions = switchPermissions;
         _mcpPolicies = mcpPolicies;
         _executions = executions;
         _chatCleanup = chatCleanup;
@@ -124,6 +136,7 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
         _k8s = cluster ?? new Kubernetes(KubernetesClientConfiguration.IsInCluster()
             ? KubernetesClientConfiguration.InClusterConfig()
             : KubernetesClientConfiguration.BuildConfigFromConfigFile());
+        _workspaceVolumes = workspaceStore is null ? null : new SessionWorkspaceVolumes(_k8s, workspaceStore, _opts.Namespace);
     }
 
     // ---------------------------------------------------------------- Credentials
@@ -829,8 +842,11 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
     public async Task<GitPatSwitchResult> SwitchSessionGitPatsAsync(string owner, string id,
         IReadOnlyList<string>? gitPatIds, CancellationToken ct = default)
     {
+        await using var held = _runtimeUpdateLock is null ? null : await _runtimeUpdateLock.TryAcquireAsync(id, ct);
+        if (_runtimeUpdateLock is not null && held is null) throw new InvalidOperationException("Session maintenance is already in progress.");
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
+        RefusePendingReplacement(rec);
         rec.GitPatIdsJson = GitPatSelection.Serialize(await ValidateGitPatIdsAsync(owner, gitPatIds, ct));
         await _store.UpsertAsync(rec, ct);
 
@@ -909,8 +925,11 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
     public async Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId,
         string? reason, CancellationToken ct = default)
     {
+        await using var held = _runtimeUpdateLock is null ? null : await _runtimeUpdateLock.TryAcquireAsync(id, ct);
+        if (_runtimeUpdateLock is not null && held is null) throw new InvalidOperationException("Session maintenance is already in progress.");
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
+        RefusePendingReplacement(rec);
         var pod = await TryReadPodAsync($"session-{id}", ct);
         SessionCredentialSwitch.Validate(rec, pod?.Status?.Phase ?? rec.Status, pod?.Status?.PodIP, credentialId);
         if (_credentialPusher is null)
@@ -1054,6 +1073,10 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
 
         try
         {
+            await using var creation = _runtimeUpdateLock is null ? null : await _runtimeUpdateLock.TryAcquireAsync(id, ct);
+            if (_runtimeUpdateLock is not null && creation is null) throw new InvalidOperationException("Session maintenance is already in progress.");
+            if (_opts.WorkspaceVolumePersistent && _workspaceVolumes is not null && SessionWorkspaceVolumes.Supported(rec))
+                await _workspaceVolumes.CreateAsync(rec, _opts.WorkspaceVolumeSize, _opts.WorkspaceVolumeStorageClass, ct);
             await RegisterEphemeralSourcesAsync(owner, id, preparedEphemeral, ct);
             await SpawnAsync(owner, rec, req, resume: false, ct);
         }
@@ -1408,6 +1431,7 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
         await using var held = await _runtimeUpdateLock.TryAcquireAsync(id, ct);
         if (held is null) throw new InvalidOperationException("Session maintenance is already in progress.");
         var record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
+        RefusePendingReplacement(record);
         if (!string.IsNullOrWhiteSpace(record.Image))
             throw new InvalidOperationException("Custom runtime images are pinned.");
         var desired = AgentPodSpecFactory.RuntimeImage(record.Agent, ConfiguredRuntimeImages);
@@ -1495,6 +1519,7 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
         await using var held = await _runtimeUpdateLock.TryAcquireAsync(id, ct);
         if (held is null) throw new InvalidOperationException("Session maintenance is already in progress.");
         var record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
+        RefusePendingReplacement(record);
         if (!string.IsNullOrWhiteSpace(record.Image))
             throw new InvalidOperationException("Custom runtime images are pinned.");
         var pod = await TryReadPodAsync($"session-{id}", ct);
@@ -1522,6 +1547,7 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
         await using var held = await _runtimeUpdateLock.TryAcquireAsync(id, ct);
         if (held is null) throw new InvalidOperationException("Session maintenance is already in progress.");
         var record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
+        RefusePendingReplacement(record);
         if (record.Mode == SessionMode.Scheduled)
         {
             // The owner's retry for a template a sync could not update; nothing is restarted.
@@ -1659,13 +1685,15 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
     {
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
+        RefusePendingReplacement(rec);
         if (rec.Mode == SessionMode.Scheduled)
             throw new ArgumentException("Scheduled sessions are not resumed; they run on their schedule.");
         await EnsureAgentAllowedAsync(rec.Agent, ct);
         await EnforceUsageLimitAsync(owner, rec.Agent, rec.AuthMode, rec.Mode, ct);
 
         await _browsers.StopAsync(id, ct);
-        await TryDeletePodAsync($"session-{id}", ct);
+        if (rec.WorkspacePersistent) await new SessionProducerCleanup(_k8s, _opts.Namespace).DeleteAsync(id, ct);
+        else await TryDeletePodAsync($"session-{id}", ct);
 
         rec.Status = "Pending";
         rec.FailureReason = null;
@@ -1706,8 +1734,11 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
     public async Task<SessionInfo> ConvertSessionAsync(string owner, string id, ConvertSessionRequest req,
         CancellationToken ct = default)
     {
+        await using var held = _runtimeUpdateLock is null ? null : await _runtimeUpdateLock.TryAcquireAsync(id, ct);
+        if (_runtimeUpdateLock is not null && held is null) throw new InvalidOperationException("Session maintenance is already in progress.");
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
+        RefusePendingReplacement(rec);
         var pod = await TryReadPodAsync($"session-{id}", ct);
         // The live pod's phase, as everywhere else: a record still saying Running for a pod that
         // has since finished must not refuse the conversion, and a stored Succeeded next to a pod
@@ -1723,7 +1754,7 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
         // Persisted before the resume on purpose: if the resume is refused (agent no longer
         // allowed, usage limit), the session is still interactive and the ordinary Resume button
         // finishes the job, instead of a session that looks autonomous and resumes interactive.
-        if (req.Resume) return await ResumeSessionAsync(owner, id, ct);
+        if (req.Resume) return await ResumeSessionCoreAsync(owner, id, ct);
         return await ToInfoAsync(rec, phase, podIp: null, await _browsers.GetSummaryAsync(id, ct), ct);
     }
 
@@ -1744,6 +1775,7 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
     {
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
+        RefusePendingReplacement(rec);
         if (rec.Mode == SessionMode.Scheduled)
             throw new ArgumentException("Scheduled sessions cannot be paused; they run on their schedule.");
 
@@ -2000,6 +2032,7 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
     {
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
+        RefusePendingReplacement(rec);
         if (req.ProjectIdSpecified && req.ProjectId != rec.ProjectId) {
             var projectPod = await TryReadPodAsync($"session-{id}", ct);
             if (rec.Mode == SessionMode.Scheduled)
@@ -2249,7 +2282,7 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
         }
     };
 
-    private async Task SpawnAsync(string owner, SessionRecord rec, CreateSessionRequest req, bool resume, CancellationToken ct)
+    private async Task SpawnAsync(string owner, SessionRecord rec, CreateSessionRequest req, bool resume, CancellationToken ct, ProviderSwitchRequest? replacement = null)
     {
         // Resolved fresh on every (re)start so catalog entries stay live:
         // an updated shared server lands in the pod on the next resume, and
@@ -2278,6 +2311,7 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
             CpuLimit = effective.CpuLimit, MemoryLimit = effective.MemoryLimit };
 
         var context = await BuildPodContextAsync(owner, rec, resume, hasGitCredentials: false, ct);
+        if (replacement is not null) context = context with { ProviderSwitchRequestId = replacement.RequestId.ToString("D"), InitialPromptOverride = replacement.Handover };
         var preparation = await AgentSessionResourceOrchestrator.PrepareAsync(
             rec,
             context,
@@ -2320,6 +2354,7 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
             (await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data, ct);
         context = context with { HasGitCredentials = preparation.HasGitCredentials,
             HasSessionSecrets = true, SecretEnvNames = envNames };
+        context = context with { Workspace = _workspaceVolumes is null ? null : await _workspaceVolumes.EnsureAsync(rec, ct) };
         var podSpec = AgentPodSpecFactory.Build(rec, req, context);
 
         if (rec.Mode == SessionMode.Scheduled)
@@ -2353,6 +2388,11 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
             try
             {
                 var meta = Meta($"session-{rec.Id}", owner, rec.Id, "agent", rec.Title);
+                if (replacement is not null)
+                {
+                    (meta.Annotations ??= new Dictionary<string, string>())[ReplacementAnnotation] = replacement.RequestId.ToString("D");
+                    meta.Annotations[ExecutionAnnotation] = rec.ExecutionGeneration.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                }
                 if (envVersion is not null)
                     (meta.Annotations ??= new Dictionary<string, string>())[SecretEnvVersionAnnotation] = envVersion;
                 await _k8s.CoreV1.CreateNamespacedPodAsync(new V1Pod { Metadata = meta, Spec = podSpec },
@@ -2549,7 +2589,15 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
 
     public async Task<string?> GetScrollbackAsync(string owner, string id, CancellationToken ct = default)
     {
-        if (await _store.GetAsync(owner, id, ct) is null) return null;
+        var record = await _store.GetAsync(owner, id, ct);
+        if (record is null) return null;
+        if (record.ExecutionGeneration > 0 && _executions is not null)
+        {
+            var snapshot = await _executions.SnapshotAsync(owner, id, record.ExecutionGeneration, ct);
+            return await TranscriptReader.ReadScrollbackAsync(
+                token => _artifacts.GetTextAsync(IArtifactStore.ExecutionScrollbackKey(Sanitize(owner), id, record.ExecutionGeneration), token),
+                _ => Task.FromResult<string?>(snapshot?.Scrollback), ct);
+        }
         // Both copies, so an S3 copy frozen by an expired upload url does not hide the current
         // one; on instances without S3 the Postgres copy is all there is.
         var key = IArtifactStore.ScrollbackKey(Sanitize(owner), id);
@@ -2563,7 +2611,7 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
     {
         if (await _store.GetAsync(owner, id, ct) is not { } rec) return null;
         return await _artifacts.OpenReadAsync(
-            IArtifactStore.StateKey(Sanitize(owner), rec.Id, rec.Agent), ct);
+            (rec.ExecutionGeneration == 0 ? IArtifactStore.StateKey(Sanitize(owner), rec.Id, rec.Agent) : IArtifactStore.ExecutionStateKey(Sanitize(owner), rec.Id, rec.ExecutionGeneration, rec.Agent)), ct);
     }
 
     /// <summary>
@@ -2576,6 +2624,12 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
     {
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
+        RefusePendingReplacement(rec);
+        await using var held = _runtimeUpdateLock is null ? null : await _runtimeUpdateLock.TryAcquireAsync(id, ct);
+        if (_runtimeUpdateLock is not null && held is null) throw new InvalidOperationException("Session maintenance is already in progress.");
+        // The phase and generation may change while waiting for another lifecycle operation.
+        rec = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException($"Session {id} not found.");
+        RefusePendingReplacement(rec);
         var pod = await TryReadPodAsync($"session-{id}", ct);
         var phase = SessionStatus.ResolvePhase(pod?.Status?.Phase, rec.Status);
         if (!SessionStatus.CanReplaceState(phase))
@@ -2583,7 +2637,7 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
                 "Pause the session before uploading its state; a running pod overwrites it on exit.");
 
         var stored = await _artifacts.TryPutStreamAsync(
-            IArtifactStore.StateKey(Sanitize(owner), rec.Id, rec.Agent),
+            (rec.ExecutionGeneration == 0 ? IArtifactStore.StateKey(Sanitize(owner), rec.Id, rec.Agent) : IArtifactStore.ExecutionStateKey(Sanitize(owner), rec.Id, rec.ExecutionGeneration, rec.Agent)),
             content, "application/gzip", contentLength, ct);
         if (stored) _log.LogInformation("Replaced stored state of session {Id} from an upload", id);
         return stored;
@@ -2647,6 +2701,7 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
         if (_chatCleanup is not null) await _chatCleanup.RemoveSessionAsync(id, rec.Title, ct);
         // Keep the registry row until storage confirms deletion: expiry retries it next pass,
         // and a failed manual delete can be retried without losing the owner/prefix mapping.
+        if (_workspaceVolumes is not null) await _workspaceVolumes.DeleteAsync(rec, ct);
         await SessionStorageCleanup.DeleteAsync(_artifacts, owner, id, ct);
         await _store.DeleteAsync(id, ct);
         await SyncSessionSecretsAsync(owner, ct);
@@ -2874,6 +2929,7 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
     private SessionInfo ToInfo(
         SessionRecord r, string phase, string? podIp, BrowserSummary? browser = null, bool hasEphemeralMcp = false) => new()
     {
+        ExecutionGeneration = r.ExecutionGeneration, ProviderSwitchPending = r.ProviderSwitchPending,
         Url = SessionUrl.For(_frontendOrigin, r.Id), SystemPrompt = r.SystemPrompt,
         Id = r.Id, Title = r.Title, Description = r.Description, Owner = r.Owner,
         Mode = r.Mode, UiMode = r.UiMode, RepoUrl = r.RepoUrl,
@@ -3004,6 +3060,10 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
 
 public sealed class AgentHubOptions
 {
+    public bool WorkspaceVolumePersistent { get; set; }
+    public string WorkspaceVolumeSize { get; set; } = "10Gi";
+    public string? WorkspaceVolumeStorageClass { get; set; }
+
     public string Namespace { get; set; } = "agenthub-sessions";
     /// <summary>Legacy Claude image option; used when ClaudeAgentImage is unset.</summary>
     public string AgentImage { get; set; } = "";

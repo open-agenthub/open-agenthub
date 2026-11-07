@@ -25,6 +25,10 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log", "secrets"]
     verbs: ["get", "list", "watch", "create", "update", "delete"]
+  # Claims must still be cleaned up after provisioning is disabled; never drop delete access.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "create", "delete"]
   - apiGroups: ["batch"]
     resources: ["cronjobs", "jobs"]
     verbs: ["get", "list", "watch", "create", "delete"]

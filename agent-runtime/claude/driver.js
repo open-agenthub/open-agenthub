@@ -231,6 +231,9 @@ function resetFromText(text, from) {
 }
 
 module.exports = {
+  supportsProviderSwitch: true,
+  providerSwitchExitKeys: ['/exit', '\r'],
+  nativeIdentity: ({ file }) => path.basename(file, '.jsonl'),
   modelCatalog: require('./model-catalog'),
   // Verified on 2.1.318 (docs/design/live-model-switch.md): `/model <id>` switches the running
   // conversation and keeps it. Mid-conversation it first asks "Switch model?" because the history

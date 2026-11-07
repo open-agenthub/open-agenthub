@@ -40,6 +40,9 @@ function validateDriver(driver) {
   if (driver.inputReadyScreen !== undefined && typeof driver.inputReadyScreen !== 'function') {
     throw new Error('Agent driver inputReadyScreen must be a function');
   }
+  if (driver.providerSwitchExitKeys !== undefined && (!Array.isArray(driver.providerSwitchExitKeys) ||
+      !driver.providerSwitchExitKeys.length || driver.providerSwitchExitKeys.some(value => typeof value !== 'string' || !value.length || value.length > 32)))
+    throw new Error('Agent driver providerSwitchExitKeys must be bounded native quit keys');
   if (driver.findTranscript !== undefined && typeof driver.findTranscript !== 'function') {
     throw new Error('Agent driver findTranscript must be a function');
   }
@@ -80,6 +83,11 @@ function validateDriver(driver) {
   // Optional: true when the runtime's hooks report its turns to POST /agenthub/turn
   // (common/fleet-turn-hook.mjs), so plain fleet messages can wait for the turn's end instead of
   // for agent_inbox (docs/priority-messages.md).
+  // Replacement admission is opt-in because readiness, archive and policy hooks must agree.
+  if (driver.supportsProviderSwitch !== undefined && typeof driver.supportsProviderSwitch !== 'boolean')
+    throw new Error('Agent driver supportsProviderSwitch must be a boolean');
+  if (driver.nativeIdentity !== undefined && typeof driver.nativeIdentity !== 'function')
+    throw new Error('Agent driver nativeIdentity must be a function');
   if (driver.turnHooks !== undefined && typeof driver.turnHooks !== 'boolean') {
     throw new Error('Agent driver turnHooks must be a boolean when present');
   }

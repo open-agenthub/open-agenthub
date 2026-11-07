@@ -18,12 +18,13 @@ public static class AgentSessionResourceOrchestrator
     public static AgentSessionArtifactUrls PresignArtifactUrls(
         IArtifactStore artifacts, string ownerKey, SessionRecord record, bool resume, TimeSpan ttl)
     {
-        var stateKey = IArtifactStore.StateKey(ownerKey, record.Id, record.Agent);
+        var stateKey = record.ExecutionGeneration == 0 ? IArtifactStore.StateKey(ownerKey, record.Id, record.Agent)
+            : IArtifactStore.ExecutionStateKey(ownerKey, record.Id, record.ExecutionGeneration, record.Agent);
         return new AgentSessionArtifactUrls(
             artifacts.PresignPut(stateKey, ttl),
             resume ? artifacts.PresignGet(stateKey, ttl) : "",
-            artifacts.PresignPut(IArtifactStore.ScrollbackKey(ownerKey, record.Id), ttl),
-            artifacts.PresignPut(IArtifactStore.TranscriptKey(ownerKey, record.Id), ttl));
+            artifacts.PresignPut(record.ExecutionGeneration == 0 ? IArtifactStore.ScrollbackKey(ownerKey, record.Id) : IArtifactStore.ExecutionScrollbackKey(ownerKey, record.Id, record.ExecutionGeneration), ttl),
+            artifacts.PresignPut(record.ExecutionGeneration == 0 ? IArtifactStore.TranscriptKey(ownerKey, record.Id) : IArtifactStore.ExecutionTranscriptKey(ownerKey, record.Id, record.ExecutionGeneration), ttl));
     }
 
     public static async Task<AgentSessionResourcePreparation> PrepareAsync(
