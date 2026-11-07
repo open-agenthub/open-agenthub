@@ -37,7 +37,7 @@ public class TerminalUpgradeDeadlineTests
         Func<CancellationToken, Task<SessionInfo?>> read)
     {
         var sessions = DispatchProxy.Create<ISessionService, Sessions>();
-        ((Sessions)(object)sessions).Read = read;
+        ((Sessions)sessions).Read = read;
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         await using var app = builder.Build();
@@ -63,7 +63,11 @@ public class TerminalUpgradeDeadlineTests
             await browser.ConnectAsync(new Uri(app.Urls.Single().Replace("http:", "ws:") + "/terminal"), timeout.Token);
             opened = true;
         }
-        catch (WebSocketException) { }
+        catch (WebSocketException refused)
+        {
+            // A refused upgrade is an expected outcome here; the status code says which one.
+            Assert.False(opened, refused.Message);
+        }
         var took = clock.Elapsed;
         var retryAfter = browser.HttpResponseHeaders?.TryGetValue("Retry-After", out var values) == true ? string.Join(",", values) : null;
         var status = opened ? (HttpStatusCode?)null : browser.HttpStatusCode;
