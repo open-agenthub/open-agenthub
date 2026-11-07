@@ -14,7 +14,7 @@ openssl req -x509 -newkey rsa:2048 -nodes -keyout "$proof_context/ca.key" -out "
 openssl req -newkey rsa:2048 -nodes -keyout "$proof_context/server.key" -out "$proof_context/server.csr" \
   -subj /CN=provider-switch-model.agenthub.svc.cluster.local >/dev/null 2>&1
 cat > "$proof_context/leaf.ext" <<'CERT'
-subjectAltName=DNS:provider-switch-model.agenthub.svc.cluster.local
+subjectAltName=DNS:provider-switch-model.agenthub.svc.cluster.local,DNS:api.anthropic.com,DNS:claude.ai,DNS:platform.claude.com
 basicConstraints=critical,CA:FALSE
 keyUsage=critical,digitalSignature,keyEncipherment
 extendedKeyUsage=serverAuth

@@ -29,6 +29,10 @@ const handle = async (req, res) => {
    try { res.setHeader('content-type','text/plain'); return res.end(fs.readFileSync(candidate)); }
    catch { res.statusCode = 404; return res.end(); }
   }
+  if (url.pathname === '/api/oauth/profile') {
+   res.setHeader('content-type','application/json');
+   return res.end(JSON.stringify({account:{uuid:'11111111-1111-4111-8111-111111111111',email:'proof@example.com',email_address:'proof@example.com',display_name:'Proof'},organization:{uuid:'22222222-2222-4222-8222-222222222222',organization_type:'claude_pro',rate_limit_tier:'default_claude_pro',billing_type:'subscription'}}));
+  }
   if (url.pathname.endsWith('/wham/accounts/check')) {
    res.setHeader('content-type','application/json');
    return res.end(JSON.stringify({accounts:[{id:'proof-account',workspace_backend_origin:'NO_CONSTRAINT',account_routing_override:'NO_CONSTRAINT',plan_type:'plus'}]}));
@@ -74,5 +78,17 @@ const handle = async (req, res) => {
   res.setHeader('content-type','application/json');res.end('{}');
  }catch{res.statusCode=500;res.end('{}');console.error('Recording model fixture rejected a request.');}
 };
-http.createServer(handle).listen(Number(process.env.PROOF_MODEL_PORT || 8080),'0.0.0.0');
-if(process.env.PROOF_TLS_CERT&&process.env.PROOF_TLS_KEY)https.createServer({cert:fs.readFileSync(process.env.PROOF_TLS_CERT),key:fs.readFileSync(process.env.PROOF_TLS_KEY)},handle).listen(Number(process.env.PROOF_TLS_PORT||8443),'0.0.0.0');
+const proxy = http.createServer(handle);
+if(process.env.PROOF_TLS_CERT&&process.env.PROOF_TLS_KEY){
+ const native = https.createServer({cert:fs.readFileSync(process.env.PROOF_TLS_CERT),key:fs.readFileSync(process.env.PROOF_TLS_KEY)},handle);
+ // Native account hosts ignore the model override. Terminate only this proof's TLS traffic;
+ // never tunnel a synthetic token to a real provider or disable certificate verification.
+ proxy.on('connect',(request,socket,head)=>{
+  if(!['api.anthropic.com:443','claude.ai:443','platform.claude.com:443'].includes(request.url)){socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');return;}
+  socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+  if(head.length)socket.unshift(head);
+  native.emit('connection',socket);
+ });
+ native.listen(Number(process.env.PROOF_TLS_PORT||8443),'0.0.0.0');
+}
+proxy.listen(Number(process.env.PROOF_MODEL_PORT || 8080),'0.0.0.0');

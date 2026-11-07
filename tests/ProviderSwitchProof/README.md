@@ -64,12 +64,14 @@ Workspace intentionally hides. Requiring it to appear as an ordinary visible use
 would falsely report failed delivery. The reviewed first handover and earlier owner turns
 must still appear in the same visible history.
 
-The Claude subscription fixture also seeds a synthetic native `oauthAccount` profile cache
-before invoking the unchanged shipped entrypoint. Its compiled profile host is independent
-of the redirected model base. A print-mode probe can work without that cache while an
-interactive subscription startup waits for profile completion. The cache contains only the
-selected synthetic account metadata, never prior native conversation or source state. This
-fixture does not prove real profile fetching, OAuth sign-in, renewal or account entitlement.
+The Claude subscription fixture seeds a synthetic native `oauthAccount` profile cache and
+routes its compiled account hosts through the recording service's TLS proxy. The proxy
+terminates only the listed native account hosts, never forwards requests externally, and
+returns a synthetic profile; unknown CONNECT destinations are refused. The scratch CA signs
+a separate server leaf for these hosts and TLS verification stays enabled. A cached profile
+alone is insufficient: background real-host 401 responses can invalidate a synthetic token
+before the first turn. Both native subscription inference and account traffic must be isolated.
+This fixture does not prove real profile fetching, OAuth sign-in, renewal or entitlement.
 
 The busy-shell admission setup opens a real Bash shell through the source pod's loopback
 WebSocket using `kubectl exec`. It exercises the common server's actual shell tracking

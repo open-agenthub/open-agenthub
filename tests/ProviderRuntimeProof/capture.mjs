@@ -102,6 +102,9 @@ try {
       delete env.CODEX_API_KEY;
 
     }
+    if(agent==='claude'&&process.env.PROOF_HTTPS_PROXY){
+      Object.assign(env,{HTTPS_PROXY:process.env.PROOF_HTTPS_PROXY,NODE_EXTRA_CA_CERTS:process.env.PROOF_EXTRA_CA,NO_PROXY:'localhost,127.0.0.1'});
+    }
     if(agent==='claude'&&process.env.PROOF_SUBSCRIPTION==='1'){
       delete env.ANTHROPIC_API_KEY;
       fs.writeFileSync(path.join(home,'.claude/.credentials.json'),JSON.stringify({claudeAiOauth:{accessToken:'synthetic-claude-subscription',refreshToken:'synthetic-refresh',expiresAt:Date.now()+86400000,scopes:['user:inference','user:profile','user:sessions:claude_code'],subscriptionType:'pro',rateLimitTier:'default_claude_pro'}}));
