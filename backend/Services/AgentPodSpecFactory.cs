@@ -51,6 +51,8 @@ public sealed record PodBuildContext
     /// </summary>
     public string? SubscriptionAccountId { get; init; }
     public bool HasGitCredentials { get; init; }
+    /// <summary>The session's MCP sharing policy blocked something when the pod was built.</summary>
+    public bool McpRestricted { get; init; }
     /// <summary>The session's own secret copies exist (docs/session-secrets.md). False only for a
     /// spec built without a spawn, such as a test or a preview.</summary>
     public bool HasSessionSecrets { get; init; }
@@ -219,6 +221,10 @@ public static class AgentPodSpecFactory
             // through: their permission settings are fixed when the process starts, which is what
             // this is for. A session that changes the flag has to be restarted for those two.
             new() { Name = "AGENTHUB_AUTO_APPROVE", Value = record.AutoApprove ? "1" : "0" },
+            // Only a seed: the Claude hook asks /mcp-policy on every MCP call and remembers what it
+            // last saw, because the owner can add or lift restrictions while the pod runs. It
+            // decides what a call made while the backend is unreachable gets — deny, not an approval.
+            new() { Name = "AGENTHUB_MCP_POLICY", Value = context.McpRestricted ? "1" : "0" },
             new() { Name = "AGENTHUB_ALLOWED_TOOLS", Value = System.Text.Json.JsonSerializer.Serialize(policy.AllowedTools) },
             new() { Name = "AGENTHUB_ALLOWED_MCP_TOOLS", Value = System.Text.Json.JsonSerializer.Serialize(policy.AllowedMcpTools) },
             new() { Name = "AGENTHUB_ALLOWED_COMMANDS", Value = System.Text.Json.JsonSerializer.Serialize(policy.AllowedCommands) },

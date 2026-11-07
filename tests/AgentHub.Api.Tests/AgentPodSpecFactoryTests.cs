@@ -865,6 +865,20 @@ public class AgentPodSpecFactoryTests
         Assert.DoesNotContain("retrying", run.Log);
     }
 
+    // The Claude hook denies MCP calls made while /mcp-policy is unreachable only if it knows the
+    // session is restricted; a pod started after the owner set a restriction has to say so.
+    [Theory]
+    [InlineData(true, "1")]
+    [InlineData(false, "0")]
+    public void Build_SeedsTheMcpRestriction(bool restricted, string expected)
+    {
+        var request = new CreateSessionRequest { Agent = AgentKind.Claude, AuthMode = AgentAuthMode.ApiKey, Mode = SessionMode.Interactive };
+        var pod = AgentPodSpecFactory.Build(Record(AgentKind.Claude, AgentAuthMode.ApiKey, SessionMode.Interactive),
+            request, Context() with { McpRestricted = restricted });
+
+        Assert.Equal(expected, Assert.Single(pod.Containers).Env.Single(item => item.Name == "AGENTHUB_MCP_POLICY").Value);
+    }
+
     private static V1PodSpec Build(AgentKind agent, AgentAuthMode auth,
         Func<CreateSessionRequest, CreateSessionRequest>? customize = null,
         OpenClawApiKeySource? openClawApiKeySource = null,

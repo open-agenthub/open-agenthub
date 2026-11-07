@@ -1,0 +1,65 @@
+# STAND-INS for the sales demo (#481), namespace "demo". Both are labelled as such in the recording.
+#   git    a git daemon with one synthetic repository, invoice-service, that accepts pushes. It
+#          stands in for the team's Git host; it has no web UI, issues or pull requests, so the
+#          demo's claim ends at "pushed branch".
+#   model  the scripted Messages endpoint in standin-model.mjs (configmap "standin-model").
+# Both listen on container port 443, which the chart's agent egress policy already allows.
+apiVersion: v1
+kind: Namespace
+metadata: { name: demo }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: git, namespace: demo }
+spec:
+  selector: { matchLabels: { app: git } }
+  template:
+    metadata: { labels: { app: git } }
+    spec:
+      containers:
+        - name: git
+          image: docker.io/library/alpine:3.20
+          command: [sh, -c]
+          args:
+            - |
+              set -e
+              apk add -q --no-cache git git-daemon nodejs
+              git config --global user.email maintainer@example.com; git config --global user.name "Demo maintainer"
+              git config --global init.defaultBranch main
+              mkdir -p /srv && git init -q --bare /srv/invoice-service.git
+              git -C /srv/invoice-service.git config daemon.receivepack true
+              git clone -q /srv/invoice-service.git /tmp/w && cd /tmp/w && mkdir -p src test
+              printf '# invoice-service (synthetic demo repository)\n\nSums invoice lines. Run the tests with `node test/total.test.js`.\n' > README.md
+              printf '// Sums invoice lines and returns the total in euros.\nfunction total(lines) {\n  const cents = lines.reduce((sum, l) => sum + l.price * l.qty, 0) * 100\n  return Math.floor(cents) / 100\n}\nmodule.exports = { total }\n' > src/total.js
+              printf "const assert = require('node:assert')\nconst { total } = require('../src/total.js')\nassert.strictEqual(total([{ price: 10, qty: 2 }]), 20)\nassert.strictEqual(total([{ price: 0.29, qty: 3 }]), 0.87) // issue #42\nconsole.log('all tests passed')\n" > test/total.test.js
+              printf '# Issue #42: invoice totals are one cent short\n\nThree items at 0.29 EUR show 0.86 EUR instead of 0.87 EUR.\n' > ISSUE-42.md
+              git add . && git commit -qm "invoice-service: initial import" && git push -q origin main
+              ! node test/total.test.js 2>/dev/null && echo "main reproduces issue #42"
+              exec git daemon --reuseaddr --export-all --enable=receive-pack --base-path=/srv --port=443 --verbose /srv
+          ports: [{ containerPort: 443 }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: git, namespace: demo }
+spec: { selector: { app: git }, ports: [{ port: 443, targetPort: 443 }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: model, namespace: demo }
+spec:
+  selector: { matchLabels: { app: model } }
+  template:
+    metadata: { labels: { app: model } }
+    spec:
+      containers:
+        - name: model
+          image: docker.io/library/node:22-alpine
+          command: [node, /app/standin-model.mjs]
+          volumeMounts: [{ name: app, mountPath: /app }]
+          ports: [{ containerPort: 443 }]
+      volumes: [{ name: app, configMap: { name: standin-model } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: model, namespace: demo }
+spec: { selector: { app: model }, ports: [{ port: 443, targetPort: 443 }] }

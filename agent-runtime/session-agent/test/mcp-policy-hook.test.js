@@ -26,11 +26,16 @@ function runtimeEnvironment(environment) {
   };
 }
 
+// The hook remembers the last restriction it saw under TMPDIR; a fresh directory per run keeps
+// one test's answer from deciding the next one's backend-unreachable case.
 function runHook(input, environment = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(bashPath, [hookPath], {
       cwd: sessionAgentDir,
-      env: runtimeEnvironment(environment),
+      env: runtimeEnvironment({
+        TMPDIR: fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-mcp-state-')),
+        ...environment
+      }),
       stdio: ['pipe', 'pipe', 'pipe']
     });
     let stdout = '';
@@ -154,11 +159,56 @@ test('MCP policy denies a blocked MCP tool', async () => {
       method: 'POST',
       path: '/mcp-policy',
       token: 'callback-token',
-      body: { tool: 'mcp__server__tool' }
+      body: { tool: 'mcp__server__tool', server: '' }
     }]);
   } finally {
     await server.close();
   }
+});
+
+// An answer with the decision alone still decides the call; "restricted" is optional to the hook.
+test('MCP policy denies on a decision-only deny', async () => {
+  const server = await startPolicyServer({ body: JSON.stringify({ decision: 'deny' }) });
+  try {
+    const result = await runHook({ tool_name: 'mcp__server__tool', tool_input: {} }, {
+      AGENTHUB_CALLBACK_URL: server.url,
+      AGENTHUB_CALLBACK_TOKEN: 'callback-token',
+      AGENTHUB_APPROVAL_HOOK: createApprovalHook()
+    });
+    assert.equal(result.output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.deepEqual(server.requests.map(request => request.path), ['/mcp-policy']);
+  } finally {
+    await server.close();
+  }
+});
+
+test('MCP policy remembers a restriction for a later unreachable backend', async () => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-mcp-state-'));
+  const server = await startPolicyServer({ body: JSON.stringify({ restricted: true, decision: 'allow' }) });
+  const environment = {
+    AGENTHUB_CALLBACK_URL: server.url,
+    AGENTHUB_CALLBACK_TOKEN: 'callback-token',
+    AGENTHUB_APPROVAL_HOOK: createApprovalHook(),
+    AGENTHUB_MCP_POLICY: '0',
+    TMPDIR: state
+  };
+  const first = await runHook({ tool_name: 'mcp__server__tool', tool_input: {} }, environment);
+  await server.close();
+  assert.equal(first.output.hookSpecificOutput.permissionDecision, 'ask');
+  assert.equal(fs.readFileSync(path.join(state, 'agenthub-mcp-policy-restricted'), 'utf8'), '1');
+
+  const second = await runHook({ tool_name: 'mcp__server__tool', tool_input: {} }, environment);
+  assert.equal(second.output.hookSpecificOutput.permissionDecision, 'deny');
+});
+
+test('a deleted state file does not lift the restriction the pod started with', async () => {
+  const result = await runHook({ tool_name: 'mcp__server__tool', tool_input: {} }, {
+    AGENTHUB_CALLBACK_URL: await closedServerUrl(),
+    AGENTHUB_CALLBACK_TOKEN: 'callback-token',
+    AGENTHUB_APPROVAL_HOOK: createApprovalHook(),
+    AGENTHUB_MCP_POLICY: '1'
+  });
+  assert.equal(result.output.hookSpecificOutput.permissionDecision, 'deny');
 });
 
 test('MCP policy hands an unrestricted response to the approval hook', async () => {
@@ -294,6 +344,31 @@ test('settings report a question opening and being answered to the session agent
   assert.deepEqual(settings.hooks.PostToolUse.filter(fleet).map(entry => entry.matcher), ['^AskUserQuestion$']);
 });
 
+// Claude Code 2.1.318's resource tools read from an MCP server under their own names. They go to
+// the policy hook with the server they name, and never to the approval hook alone.
+test('resource tools are routed to the policy with their server', async () => {
+  const settings = renderSettings('interactive');
+  const [policy, approval] = settings.hooks.PreToolUse.map(entry => new RegExp(entry.matcher));
+  // The aliases too: Claude Code matches hooks against them as well.
+  for (const tool of ['ListMcpResourcesTool', 'ReadMcpResourceTool', 'ReadMcpResourceDirTool', 'ListMcpResources', 'ReadMcpResource', 'ReadMcpResourceDir', 'mcp__a__b']) {
+    assert.ok(policy.test(tool) && !approval.test(tool), tool);
+  }
+  for (const tool of ['Bash', 'Read', 'WebFetch']) assert.ok(!policy.test(tool) && approval.test(tool), tool);
+
+  const server = await startPolicyServer({ body: JSON.stringify({ restricted: true, decision: 'deny' }) });
+  try {
+    const result = await runHook({ tool_name: 'ReadMcpResourceTool', tool_input: { server: 'ops.tools', uri: 'secret://token' } }, {
+      AGENTHUB_CALLBACK_URL: server.url,
+      AGENTHUB_CALLBACK_TOKEN: 'callback-token',
+      AGENTHUB_APPROVAL_HOOK: createApprovalHook()
+    });
+    assert.equal(result.output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.deepEqual(server.requests.map(request => request.body), [{ tool: 'ReadMcpResourceTool', server: 'ops.tools' }]);
+  } finally {
+    await server.close();
+  }
+});
+
 test('MCP policy settings register both matchers in every mode', () => {
   for (const mode of ['interactive', 'autonomous', 'scheduled']) {
     const settings = renderSettings(mode);
@@ -301,7 +376,7 @@ test('MCP policy settings register both matchers in every mode', () => {
     assert.equal(settings.hooks.Notification.length, 1);
     assert.deepEqual(settings.hooks.PreToolUse, [
       {
-        matcher: 'mcp__.*',
+        matcher: '^(mcp__|ListMcpResources|ReadMcpResource)',
         hooks: [{
           type: 'command',
           command: '/opt/session-agent/claude/hooks/mcp-policy-hook.sh',
@@ -310,7 +385,7 @@ test('MCP policy settings register both matchers in every mode', () => {
         }]
       },
       {
-        matcher: '^(?!mcp__).*',
+        matcher: '^(?!mcp__|ListMcpResources|ReadMcpResource)',
         hooks: [{
           type: 'command',
           command: '/opt/session-agent/claude/hooks/pretooluse-hook.sh',
