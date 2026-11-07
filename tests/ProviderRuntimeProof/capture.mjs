@@ -71,6 +71,8 @@ try {
   const agents=(process.env.PROOF_AGENTS||'claude,codex').split(',');
   assert(agents.length&&agents.every(agent=>['claude','codex'].includes(agent)));
   for (const agent of agents) {
+    const ordinaryNew=process.env.PROOF_ORDINARY_NEW_RESUME==='1';
+    if(ordinaryNew)assert(agent==='codex'&&process.env.PROOF_SOURCE_PREPARE==='1','ordinary /new acceptance requires the managed Codex source rig');
     const root = path.join(out, agent); const home = path.join(root, 'home'); const work = path.join(root, 'work');
     for (const dir of [work, path.join(home, '.claude'), path.join(home, '.codex'), path.join(root, 'tmp')]) fs.mkdirSync(dir, { recursive: true });
     const apiKey = 'synthetic-history-key';
@@ -129,6 +131,7 @@ try {
       Object.assign(env,{AGENTHUB_REQUIRE_NATIVE_RESUME:'1',AGENTHUB_RESUME:'1',AGENTHUB_STATE_RESTORED:'0'});
       delete env.AGENTHUB_PROVIDER_SWITCH_ID;
     }
+    if(ordinaryNew)delete env.AGENTHUB_PROVIDER_SWITCH_ID;
     let command = process.execPath, args = [path.join(repo, 'agent-runtime/session-agent/server.js')];
     if (process.env.PROOF_SOURCE_PREPARE === '1' && agent === 'codex') {
       assert(process.env.PROOF_PROOT && path.isAbsolute(process.env.PROOF_PROOT), 'managed source proof requires PROOF_PROOT');
@@ -192,10 +195,11 @@ try {
       const route = 'http://127.0.0.1:18674/agenthub/provider-switch';
       const state = await until(async () => {
         const current = await (await fetch(route, { headers: authority })).json();
-        return current.ready && current.markerSeen && current.nativeId && current;
+        return current.ready && (ordinaryNew||current.markerSeen) && current.nativeId && current;
       });
       let resumeNativeId=state.nativeId;
       let resumeHistory='HISTORY-'+agent+'-0';
+      if(!ordinaryNew){
       assert(state.draining);
       socket.send(JSON.stringify({ type: 'input', data: 'BLOCKED-BEFORE-RELEASE\r' }));
       await sleep(500);
@@ -206,6 +210,18 @@ try {
       assert.equal((await release.json()).draining, false);
       assert(archives.some(item => item.route === '/state/' + agent && item.bytes.length > 0));
       fs.writeFileSync(path.join(root, 'state.tgz'), archives.filter(item => item.route === '/state/' + agent).at(-1).bytes);
+      }
+      if(ordinaryNew){
+        socket.send(JSON.stringify({type:'input',data:'/new'}));await sleep(200);
+        socket.send(JSON.stringify({type:'input',data:'\r'}));
+        await until(()=>Array.from({length:term.rows},(_,index)=>term.buffer.active.getLine(term.buffer.active.viewportY+index)?.translateToString(true)??'').some(line=>/^\s*›/.test(line)&&!line.includes('HISTORY-')));
+        socket.send(JSON.stringify({type:'input',data:'HISTORY-codex-1'}));await sleep(200);
+        socket.send(JSON.stringify({type:'input',data:'\r'}));
+        const changed=await until(async()=>{const current=await(await fetch(route,{headers:authority})).json();return current.nativeId&&current.nativeId!==state.nativeId&&(await transcript()).includes('Answer HISTORY-codex-1')&&current;});
+        resumeNativeId=changed.nativeId;resumeHistory='HISTORY-codex-1';
+        assert((await transcript()).includes('HISTORY-codex-0'),'Workspace history retains the earlier conversation across /new');
+        console.log('codex: ordinary generation-zero /new changed native identity and Workspace transcript');
+      }
       if(process.env.PROOF_CONTEXT_CLEAR_BEFORE_RESUME==='1'){
         assert(agent==='codex'&&process.env.PROOF_SOURCE_PREPARE==='1','native clear proof requires the managed Codex source rig');
         const cleared=await fetch('http://127.0.0.1:18674/agenthub/context-clear',{method:'POST',headers:authority,body:JSON.stringify({followUp:'HISTORY-codex-1'})});
@@ -214,7 +230,7 @@ try {
         resumeNativeId=changed.nativeId;resumeHistory='HISTORY-codex-1';
         console.log('codex: actual context clear created a new native identity before archive recovery');
       }
-      if (process.env.PROOF_SOURCE_PREPARE === '1') {
+      if (process.env.PROOF_SOURCE_PREPARE === '1'&&!ordinaryNew) {
         const nextRequest = '22222222-2222-4222-8222-222222222222';
         if(process.env.PROOF_SOURCE_SHELL==='1'){
           const shell=new WebSocket('ws://127.0.0.1:18674/shell');
@@ -279,6 +295,7 @@ try {
           AGENTHUB_PROMPT:'STALE-SOURCE-PROMPT-MUST-NOT-RUN'};
         if(agent==='codex')resumedEnv.CODEX_HOME=process.env.PROOF_SOURCE_PREPARE==='1'?env.CODEX_HOME:path.join(resumedHome,'.codex');
         delete resumedEnv.AGENTHUB_PROVIDER_SWITCH_ID;
+        if(ordinaryNew){delete resumedEnv.AGENTHUB_REQUIRE_NATIVE_RESUME;delete resumedEnv.AGENTHUB_NATIVE_SESSION_ID;}
         if(agent==='codex'&&process.env.PROOF_POISON_NATIVE_POINTER==='1'){
           const sessions=path.join(resumedHome,'.codex/sessions');
           const before=new Set(fs.readdirSync(sessions,{recursive:true}).filter(file=>file.endsWith('.jsonl')));
@@ -314,6 +331,7 @@ try {
           await until(()=>requests.some(item=>item.text.includes('FOLLOWUP-AFTER-NATIVE-RESUME')&&item.text.includes(resumeHistory)));
           assert(!requests.some(item=>item.text.includes('STALE-SOURCE-PROMPT-MUST-NOT-RUN')));
           if(process.env.PROOF_CONTEXT_CLEAR_BEFORE_RESUME==='1')assert(!requests.filter(item=>item.text.includes('FOLLOWUP-AFTER-NATIVE-RESUME')).some(item=>item.text.includes('HISTORY-codex-0')));
+          if(ordinaryNew)assert(!requests.filter(item=>item.text.includes('FOLLOWUP-AFTER-NATIVE-RESUME')).some(item=>item.text.includes('HISTORY-codex-0')),'ordinary resume must continue the /new thread');
           if(agent==='codex'&&process.env.PROOF_POISON_NATIVE_POINTER==='1')assert(!requests.filter(item=>item.text.includes('FOLLOWUP-AFTER-NATIVE-RESUME')).some(item=>item.text.includes('OTHER-NATIVE-CONVERSATION')));
           await until(async()=>(await transcript()).includes('FOLLOWUP-AFTER-NATIVE-RESUME'));
           text=await transcript();
