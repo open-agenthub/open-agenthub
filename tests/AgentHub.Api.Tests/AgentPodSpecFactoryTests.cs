@@ -9,6 +9,22 @@ namespace AgentHub.Api.Tests;
 public class AgentPodSpecFactoryTests
 {
     [Theory]
+    [InlineData("https://collector.example.com", false)]
+    [InlineData("http://callback.example.com/internal/otel", false)]
+    [InlineData("http://callback/internal/otel", true)]
+    [InlineData("http://callback/internal/otel/", true)]
+    public void Telemetry_CustomEndpointReceivesCredentialOnlyWhenItIsTheHub(string endpoint, bool authenticated)
+    {
+        var context = Context();
+        var pod = AgentPodSpecFactory.Build(Record(AgentKind.Claude, AgentAuthMode.ApiKey, SessionMode.Interactive),
+            new CreateSessionRequest { Agent = AgentKind.Claude, AuthMode = AgentAuthMode.ApiKey },
+            context with { Runtime = context.Runtime with { TelemetryEnabled = true, TelemetryOtlpEndpoint = endpoint } });
+        var env = Assert.Single(pod.Containers).Env;
+        Assert.Equal(endpoint.TrimEnd('/'), env.Single(e => e.Name == "OTEL_EXPORTER_OTLP_ENDPOINT").Value);
+        Assert.Equal(authenticated, env.Any(e => e.Name == "OTEL_EXPORTER_OTLP_HEADERS"));
+    }
+
+    [Theory]
     [InlineData(AgentKind.Claude)]
     [InlineData(AgentKind.Codex)]
     [InlineData(AgentKind.Cursor)]

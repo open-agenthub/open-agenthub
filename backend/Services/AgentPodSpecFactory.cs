@@ -397,14 +397,17 @@ public static class AgentPodSpecFactory
 
         if (record.Agent == AgentKind.Claude && context.Runtime.TelemetryEnabled)
         {
+            var hubOtlpBase = context.CallbackUrl[..context.CallbackUrl.LastIndexOf("/internal/sessions/", StringComparison.Ordinal)] + "/internal/otel";
             var otlpBase = string.IsNullOrWhiteSpace(context.Runtime.TelemetryOtlpEndpoint)
-                ? context.CallbackUrl[..context.CallbackUrl.LastIndexOf("/internal/sessions/", StringComparison.Ordinal)] + "/internal/otel"
+                ? hubOtlpBase
                 : context.Runtime.TelemetryOtlpEndpoint.TrimEnd('/');
             env.Add(new() { Name = "CLAUDE_CODE_ENABLE_TELEMETRY", Value = "1" });
             env.Add(new() { Name = "OTEL_METRICS_EXPORTER", Value = "otlp" });
             env.Add(new() { Name = "OTEL_TRACES_EXPORTER", Value = "none" });
             env.Add(new() { Name = "OTEL_LOGS_EXPORTER", Value = "none" });
-            env.Add(new() { Name = "OTEL_EXPORTER_OTLP_HEADERS", Value = $"X-Agent-Token={record.CallbackToken}" });
+            // A custom collector must not receive a credential for the session's callback routes.
+            if (string.Equals(otlpBase, hubOtlpBase, StringComparison.Ordinal))
+                env.Add(new() { Name = "OTEL_EXPORTER_OTLP_HEADERS", Value = $"X-Agent-Token={record.CallbackToken}" });
             env.Add(new() { Name = "OTEL_EXPORTER_OTLP_PROTOCOL", Value = "http/protobuf" });
             env.Add(new() { Name = "OTEL_EXPORTER_OTLP_ENDPOINT", Value = otlpBase });
             env.Add(new() { Name = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", Value = $"{otlpBase}/v1/metrics" });

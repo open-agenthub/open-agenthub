@@ -158,15 +158,18 @@ month rolls over.
 - Rows that are `custom` or `unknown` show a pill and no money. An `unknown` row's tooltip names
   the cost the CLI reported, so it can still be found.
 
-
 ## Session telemetry credentials
 
 OTLP ingest requires `X-Agent-Token` and resolves the session through the same callback-token
 registry as the other internal routes. The full parsed batch must match that session before
 any delta is stored; invalid credentials return 401 and mismatched batches return 400.
-Claude receives `OTEL_EXPORTER_OTLP_HEADERS` from the pod factory, including when an operator
-configures a custom telemetry collector. Such a collector must be trusted to receive the
-session credential and must preserve the header if it forwards to the hub.
+Claude receives `OTEL_EXPORTER_OTLP_HEADERS` from the pod factory only when exporting to the
+hub's internal OTLP route. The deployment-wide `telemetry.otlpEndpoint` chart value maps to
+`AgentHub:TelemetryOtlpEndpoint`; it is not a per-session option. A different collector endpoint
+receives no callback credential, and its exports do not count usage in AgentHub. Forwarding
+from a custom collector to the hub is not supported; a collector-specific credential would
+need a separate design. Sending the callback credential to a collector was rejected because
+that credential also authorizes other session callbacks.
 
 Codex, Cursor, OpenClaw and OpenCode have no OTLP exporter configured by the runtime. Their
 common usage reporter uses the credential on `/internal/sessions/{id}/usage` instead. Cursor
