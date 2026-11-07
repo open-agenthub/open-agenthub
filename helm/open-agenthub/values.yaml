@@ -16,9 +16,13 @@ image:
   # names are agent-runtime-claude, agent-runtime-codex, agent-runtime-cursor,
   # agent-runtime-openclaw, and agent-runtime-opencode unless overridden below.
   registry: ghcr.io/open-agenthub/open-agenthub
+  # Empty = the chart's appVersion, so a chart version installs exactly that release and an
+  # upgrade moves every component with it. Set a tag only to deviate on purpose; a moving one
+  # such as "latest" also needs pullPolicy/agent.pullPolicy "Always", or nodes keep whatever
+  # they pulled first.
   # Quote a commit-SHA tag (tag: "4317158e6") or pass it with --set-string: YAML reads an
   # unquoted SHA made of digits and one "e" as a number, and the image becomes "4.317158e+06".
-  tag: latest
+  tag: ""
   pullPolicy: IfNotPresent
   # Name of an existing dockerconfigjson secret (empty = none). Must exist in the release
   # namespace AND in the sessionsNamespace (agent pods use it to pull the agent-runtime image).

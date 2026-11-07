@@ -2,7 +2,9 @@
 const crypto = require('node:crypto');
 const { createWorkspaceDiff } = require('./workspace-diff');
 const { listSlashCommands } = require('./slash-commands');
-const { createModelCatalog } = require('./model-catalog');
+const { createModelCatalog, MODEL_ID } = require('./model-catalog');
+const { detectMenu } = require('./cli-menu');
+const { switchModel, renderLines, ModelSwitchError, RENDER_BYTES: MODEL_SWITCH_RENDER_BYTES } = require('./model-switch');
 const { slimRecord } = require('./transcript-records');
 
 const { loadDriver, validateDriver } = require('./driver-contract');
@@ -10,7 +12,7 @@ const { LocalFileStore, LocalFileError } = require('../files/local-store');
 const { AttachmentMaterializer } = require('../files/materialize');
 const credentials = require('./credential-install');
 const { injectTerminalInput, formatFleetMessage, INTERRUPT_PAUSE_MS, ESCAPE } = require('./terminal-inject');
-const { createNextTurnDelivery, renderScreen, IDLE_QUIET_MS } = require('./next-turn');
+const { createNextTurnDelivery, renderScreen, isTerminalReply, IDLE_QUIET_MS } = require('./next-turn');
 // How long a typed handover may take to appear in the CLI's transcript. Both CLIs write the
 // user turn when it is submitted, before the model answers.
 const HANDOVER_VERIFY_MS = 10_000;
@@ -26,6 +28,8 @@ const gitIdentity = require('./git-identity');
 // (ScrollbackLimits.MaxChars in backend/Services); the two have to agree, or a resume seeded
 // from the hub's copy comes back shorter than what this process uploaded.
 const MAX_BUFFER = 1_000_000;
+// How long a model switch waits for the safe point it was found at to be taken (#478).
+const MODEL_SWITCH_START_MS = 5_000;
 // The question an open dialog shows in the sidebar's tooltip (#361): one line, not the whole
 // question tool input, which the session list would carry on every poll.
 const DIALOG_TITLE_MAX = 200;
@@ -162,6 +166,7 @@ function createCommonServer(options = {}) {
   const setIntervalImpl = supplied.setInterval || setInterval;
   const clearIntervalImpl = supplied.clearInterval || clearInterval;
   const setTimeoutImpl = supplied.setTimeout || setTimeout;
+  const clearTimeoutImpl = supplied.clearTimeout || clearTimeout;
   const now = supplied.now || Date.now;
   const fileStore = supplied.fileStore || new LocalFileStore({
     root: env.AGENTHUB_FILE_ROOT || '/workspace/.agenthub/files' });
@@ -296,6 +301,26 @@ function createCommonServer(options = {}) {
   // landing in the middle of it.
   let inputHeldForTyping = [];
   let clearTarget = null;
+  // A model switch in progress (#478), and the listeners that see the CLI's output while it waits
+  // for the confirmation.
+  let modelSwitching = false;
+  const outputTaps = new Set();
+  // Whether the person left text in the CLI's prompt box that was not submitted (#478). A typed
+  // command would be appended to it and sent as one line. Narrower than the fleet path's "keys
+  // since the last prompt": answering a question or approval, moving through a menu and sending a
+  // slash command from the composer (which no prompt hook reports) leave no draft behind, and
+  // counting them blocked the switch until the next message. Enter submits what is in the box,
+  // Ctrl+C and Ctrl+U empty it.
+  let promptDraft = false;
+  function trackPromptDraft(data) {
+    if (typeof data !== 'string' || isTerminalReply(data)) return;
+    if (/[\r\n\x03\x15]$/.test(data)) { promptDraft = false; return; }
+    if (activityWaitingFor) return;
+    const text = data.replace(/\x1b\[20[01]~/g, '');
+    // An escape sequence is a key (arrows, Escape, function keys), not text in the box.
+    if (text.startsWith('\x1b')) return;
+    if (/[^\x00-\x1f\x7f]/.test(text)) promptDraft = true;
+  }
   // The handover of a context clear not yet seen in the fresh transcript (#336). Inside the state
   // directory, so the archive carries it to a pod that replaces this one.
   const handoverFile = require('node:path').join(home, driver.stateDir, 'agenthub-context-handover.json');
@@ -1323,6 +1348,7 @@ function createCommonServer(options = {}) {
       attemptOutput += data;
       remember(data);
       broadcast(data);
+      for (const tap of outputTaps) tap(data);
       limitDetector.feedTerminal(data);
       if (!agentReady) checkAgentReady();
     });
@@ -1461,6 +1487,7 @@ function createCommonServer(options = {}) {
           activityWaitingFor = null;
           publishActivity();
         }
+        trackPromptDraft(message.data);
         if (nextTurn) {
           nextTurn.personInput(message.data);
           if (nextTurn.isTyping()) {
@@ -1902,6 +1929,7 @@ function createCommonServer(options = {}) {
     // continuation. Keep that distinction instead of turning its idle report into a Stop.
     if (event === 'prompt') {
       activityPromptAt = now();
+      promptDraft = false;
       // Complete before the prompt hook returns so a later question cannot be cleared by a
       // delayed callback from the previous prompt. Failure must not prevent the native turn.
       if (callback && token) {
@@ -1936,6 +1964,144 @@ function createCommonServer(options = {}) {
     if (!input || Object.keys(input).some(key => key !== 'followUp')) return fileError(response, 400, 'invalid_follow_up');
     try { sendJson(response, 202, contextClear.schedule(input.followUp)); }
     catch (error) { fileError(response, error.message === 'context_clear_pending' ? 409 : 400, error.message); }
+  }
+
+  function headlessTerminal() {
+    // Images install modules beside common/; source checkouts install them in session-agent/.
+    HeadlessTerminal ||= require(require.resolve('@xterm/headless', {
+      paths: [__dirname, require('node:path').join(__dirname, '..', 'session-agent')]
+    })).Terminal;
+    return HeadlessTerminal;
+  }
+
+  /**
+   * Why the model cannot be switched right now, or null (#478). The command is typed into the
+   * same input a person and the fleet type into, so it waits for the same safe point: no turn
+   * running, no dialog, no draft in the prompt box. Refused rather than queued: a switch that
+   * happens minutes later, between two turns nobody watched, would change the model under a
+   * conversation the person has moved on in.
+   */
+  async function modelSwitchBlocker() {
+    if (modelSwitching) return 'model_switch_pending';
+    if (!agentReady) return 'agent_starting';
+    if (activityWaitingFor === 'approval') return 'approval_open';
+    if (activityWaitingFor === 'answer' || (typeof hubDialogTitle === 'string')) return 'question_open';
+    if (contextClear && (contextClear.pending || contextClear.executing)) return 'context_clear_pending';
+    const size = lastSize || { cols: 120, rows: 32 };
+    if (promptDraft) return 'draft_in_prompt';
+    if (nextTurn) {
+      const reason = nextTurn.inputBlocker(term, size, { ignoreDraft: true });
+      if (reason === 'typing') return 'message_typing';
+      if (reason) return 'turn_running';
+    } else if (now() - activityLastOutput < IDLE_QUIET_MS) {
+      return 'turn_running';
+    }
+    const screen = await renderScreen(scrollback, size, headlessTerminal());
+    if (detectMenu(screen)) return 'menu_open';
+    if (typeof driver.modelSwitch.idleScreen === 'function' && !driver.modelSwitch.idleScreen(screen)) return 'turn_running';
+    return null;
+  }
+
+  async function runModelSwitch(model) {
+    const target = term;
+    const size = lastSize || { cols: 120, rows: 32 };
+    const Terminal = headlessTerminal();
+    const base = scrollback.slice(-MODEL_SWITCH_RENDER_BYTES);
+    let added = '';
+    const tap = data => { added += data; if (added.length > MAX_BUFFER) added = added.slice(-MAX_BUFFER); };
+    const assertTarget = () => {
+      if (term !== target || exited || restartReason !== null || runtimeDraining) throw new ModelSwitchError('agent_restarted');
+    };
+    const wait = ms => new Promise(resolve => setTimeoutImpl(resolve, ms));
+    const tools = {
+      type: async text => { assertTarget(); await injectTerminalInput(target, text, { wait }); },
+      keys: async data => { assertTarget(); target.write(data); },
+      before: () => renderLines(base, size, Terminal),
+      lines: () => renderLines(base + added, size, Terminal),
+      screen: () => renderScreen(base + added, size, Terminal),
+      catalog: () => modelCatalog.get(),
+      env, home, fs
+    };
+    outputTaps.add(tap);
+    try { return await switchModel(driver.modelSwitch, model, tools, { now, wait }); }
+    finally { outputTaps.delete(tap); }
+  }
+
+  // Runs `work` as the next safe-point action, so the person's keys are held while it types (the
+  // way they are for a fleet message) and nothing else is typed in between. A CLI that reports no
+  // turns has no such scheduler; there the blocker check right before is all there is.
+  function atSafePoint(work) {
+    if (!nextTurn) return work();
+    return new Promise((resolve, reject) => {
+      let started = false;
+      let cancelled = false;
+      const timer = setTimeoutImpl(() => {
+        if (started) return;
+        cancelled = true;
+        reject(new ModelSwitchError('turn_running'));
+      }, MODEL_SWITCH_START_MS);
+      nextTurn.scheduleAtSafePoint(async () => {
+        if (cancelled) return false;
+        started = true;
+        clearTimeoutImpl(timer);
+        try { resolve(await work()); } catch (error) { reject(error); }
+        // No turn was started: the scheduler goes back to idle.
+        return false;
+      }, { atStart: nextTurn.state === 'unknown', ignoreDraft: true });
+      deliverNextTurnIfIdle();
+    });
+  }
+
+  /**
+   * POST /agenthub/model {model}: switches the running CLI to `model` with its own command and
+   * answers once the CLI confirmed it (#478, docs/design/live-model-switch.md). 409 with the
+   * reason while that is not safe, 422 when the CLI refused the id, 504 when it never confirmed.
+   */
+  async function handleModelSwitchRequest(request, response) {
+    response.setHeader('Cache-Control', 'no-store');
+    if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
+    if (request.method !== 'POST') {
+      response.setHeader('Allow', 'POST');
+      return fileError(response, 405, 'method_not_allowed');
+    }
+    if (!driver.modelSwitch || chatMode || mode !== 'interactive') return fileError(response, 400, 'model_switch_unsupported');
+    if (exited || !term || restartReason !== null || runtimeDraining) return fileError(response, 409, 'agent_not_running');
+    const raw = await readBoundedBody(request, 4 * 1024);
+    if (!raw) return fileError(response, 413, 'request_too_large');
+    let model;
+    try {
+      const input = JSON.parse(raw.toString('utf8'));
+      if (!input || typeof input !== 'object' || Object.keys(input).some(key => key !== 'model')) throw new Error();
+      model = input.model;
+    } catch { return fileError(response, 400, 'invalid_model'); }
+    if (typeof model !== 'string' || !MODEL_ID.test(model)) return fileError(response, 400, 'invalid_model');
+    const blocker = await modelSwitchBlocker();
+    if (blocker) return fileError(response, 409, blocker);
+    modelSwitching = true;
+    try {
+      const result = await atSafePoint(() => runModelSwitch(model));
+      console.log('[agent] Model switched to ' + model);
+      // The hub stores the model now, but this pod's environment still holds the one it started
+      // with, and an agent restart inside the pod (an account switch, a resume fallback) builds
+      // its command from that: a CLI that reads its model at start would come back on the old
+      // one while the Workspace shows the new one. The next restart starts from what the hub
+      // stores.
+      env.AGENTHUB_MODEL_NAME = model;
+      agentEnv.AGENTHUB_MODEL_NAME = model;
+      if (typeof driver.modelSwitch.childEnv === 'function') Object.assign(agentEnv, driver.modelSwitch.childEnv(model));
+      sendJson(response, 200, { model, confirmation: secretMask.mask(result.confirmation || '').slice(0, 200) });
+    } catch (error) {
+      const code = error instanceof ModelSwitchError ? error.code : 'model_switch_failed';
+      console.warn('[agent] Model switch to ' + model + ' failed: ' + code);
+      const status = code === 'model_refused' || code === 'model_switch_wrong_model' ? 422
+        : code === 'model_switch_not_confirmed' || code === 'model_picker_not_shown' ? 504
+        : code === 'invalid_model' || code === 'model_not_in_catalog' || code === 'model_name_ambiguous' ? 400
+        : code === 'model_switch_failed' ? 500 : 409;
+      const detail = error instanceof ModelSwitchError && error.detail ? secretMask.mask(String(error.detail)).slice(0, 200) : undefined;
+      sendJson(response, status, { error: code, ...(detail ? { detail } : {}) });
+    } finally {
+      modelSwitching = false;
+    }
   }
 
   function parseFleetMessage(raw) {
@@ -2131,6 +2297,7 @@ function createCommonServer(options = {}) {
     if (requestPath === '/agenthub/messages') return handleMessageRequest(request, response);
     if (requestPath === '/agenthub/transcript') return handleTranscriptRequest(request, response);
     if (requestPath === '/agenthub/context-clear') return handleContextClearRequest(request, response);
+    if (requestPath === '/agenthub/model') return handleModelSwitchRequest(request, response);
     if (requestPath === '/agenthub/turn') return handleTurnRequest(request, response);
     if (requestPath === '/agenthub/mod/inbox' || requestPath === '/agenthub/mod/heartbeat' ||
         requestPath === '/agenthub/mod/ack' || requestPath === '/agenthub/mod/limit') {

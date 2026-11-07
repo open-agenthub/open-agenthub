@@ -23,7 +23,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: renderer
-          image: "{{ .Values.files.officePreview.image.repository }}:{{ .Values.files.officePreview.image.tag | default .Values.image.tag }}"
+          image: "{{ .Values.files.officePreview.image.repository }}:{{ .Values.files.officePreview.image.tag | default (include "agenthub.imageTag" .) }}"
           imagePullPolicy: {{ .Values.files.officePreview.image.pullPolicy }}
           ports: [{ containerPort: 8080 }]
           securityContext:
