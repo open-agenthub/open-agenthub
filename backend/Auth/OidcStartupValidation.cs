@@ -18,15 +18,19 @@ public static class OidcStartupValidation
             if (string.IsNullOrWhiteSpace(metadata.Issuer) || metadata.SigningKeys.Count == 0)
                 throw new InvalidOperationException("Discovery did not provide an issuer and signing keys.");
         }
-        catch (Exception)
-        {
-            // Discovery exceptions can contain response bodies or URLs with credentials. Keep
-            // one operator-facing error rather than emitting remote text or failing each request.
-            throw new HubAuthConfigurationException(
-                "OIDC startup validation failed. Check oidc.authority, issuer discovery and signing-key "
-                + "reachability from the backend, DNS and TLS trust. HTTPS metadata is required by default; "
-                + "an isolated HTTP test issuer needs oidc.requireHttpsMetadata=false. "
-                + "The backend has stopped without accepting requests.");
-        }
+        catch (InvalidOperationException) { throw Failure(); }
+        catch (ArgumentException) { throw Failure(); }
+        catch (FormatException) { throw Failure(); }
+        catch (HttpRequestException) { throw Failure(); }
+        catch (IOException) { throw Failure(); }
+        catch (OperationCanceledException) { throw Failure(); }
     }
+
+    // Discovery errors may carry remote response contents. Keep expected configuration and
+    // transport failures actionable without exposing them; programming errors still propagate.
+    private static HubAuthConfigurationException Failure() => new(
+        "OIDC startup validation failed. Check oidc.authority, issuer discovery and signing-key "
+        + "reachability from the backend, DNS and TLS trust. HTTPS metadata is required by default; "
+        + "an isolated HTTP test issuer needs oidc.requireHttpsMetadata=false. "
+        + "The backend has stopped without accepting requests.");
 }
