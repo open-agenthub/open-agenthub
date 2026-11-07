@@ -128,10 +128,13 @@ jobs:
       # bare /models, a search by display name, Enter, and its state file. None of that is a stable
       # interface, so the pinned CLI in the image proves it on every change, a version bump included
       # (docs/design/live-model-switch.md). The model is a local mock; no provider is reached.
+      # /tmp with exec, as a session pod's emptyDir has it: OpenCode's TUI unpacks its native render
+      # library into TMPDIR and loads it from there, which Docker's default noexec tmpfs refuses
+      # ("failed to map segment from shared object").
       - name: Prove the OpenCode model switch in the image
         run: |
           docker run --rm --read-only --user 1000:1000 \
-            --tmpfs /tmp:rw,mode=1777 -v "$PWD/tests/ModelSwitchProof:/proof:ro" \
+            --tmpfs /tmp:rw,exec,mode=1777 -v "$PWD/tests/ModelSwitchProof:/proof:ro" \
             -e PROOF_RUNTIME=/opt/session-agent -e XTERM=/opt/session-agent -e CLIS=/tmp/clis \
             --entrypoint bash open-agenthub-dev/agent-runtime-opencode:test -c '
               mkdir -p /tmp/clis/node_modules/.bin
