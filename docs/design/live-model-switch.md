@@ -33,8 +33,9 @@ Three observations shaped the design more than the table rows:
   model on a resume as well. OpenCode's `--continue` kept the session's last model even with both
   the config `model` and `--model` set, which is why OpenCode switches live only.
 - **Claude Code saves a live switch as the default** in `~/.claude/settings.json`. The session's
-  stored model (`ANTHROPIC_MODEL` at start) takes precedence over that file, so the stored model is
-  updated after every confirmed switch; otherwise a restart would go back to the old one.
+  stored model (`ANTHROPIC_MODEL` at start) takes precedence over that file — checked with a saved
+  default naming another model, where the turn still went to `ANTHROPIC_MODEL` — so the stored model
+  is updated after every confirmed switch; otherwise a restart would go back to the old one.
 
 ## How the Workspace switches
 
