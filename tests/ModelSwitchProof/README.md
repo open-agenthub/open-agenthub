@@ -41,7 +41,7 @@ the way the hub sends it.
 node session-agent-e2e.mjs codex out-e2e-codex      # claude | codex | opencode | openclaw
 ```
 
-`result.json` holds: the switch answer and the CLI's confirmation line, the model of the next
+It prints, as JSON: the switch answer and the CLI's confirmation line, the model of the next
 turn and whether it still carried the first, the refusal while a turn runs (and that nothing was
 typed for it), and the refusals of an invalid id and a wrong token. Not covered here: the turn
 hooks the real entrypoints install (Codex's `/etc/codex`, OpenCode's `/etc/opencode`), so in

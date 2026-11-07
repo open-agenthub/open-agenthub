@@ -35,9 +35,8 @@ const check = (name, ok, detail = '') => { results.push({ name, ok, detail }); c
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 // ---- the real session agent with the real Codex CLI ----
-const log = path.join(out, 'model.jsonl')
-const mock = await startMock({ log, slowMs: 12_000 })
-const requests = () => fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
+const mock = await startMock({ slowMs: 12_000 })
+const requests = () => mock.requests()
 const home = fs.mkdtempSync(path.join(out, 'home-'))
 const work = fs.mkdtempSync(path.join(out, 'work-'))
 const prepared = prepareAgent('codex', { home, work, port: mock.port, clis: CLIS })
@@ -67,8 +66,14 @@ async function sessionJson() {
     phase: 'Running', status: 'Running', uiMode: 'terminal', podIp: '127.0.0.1', modelName: row.modelName, accessRole: roles[user],
     sharedBy: roles[user] ? 'alice' : undefined, browser: { phase: 'Stopped' }, effectiveSecrets: [] }
 }
-function forward(req, res, target) {
-  const proxied = http.request(target + req.url, { method: req.method, headers: { ...req.headers, host: new URL(target).host } }, answer => {
+// Only the two model routes are forwarded, each to a fixed path: nothing in the request decides
+// where the stand-in connects.
+const HOST_ROUTES = {
+  '/api/sessions/proof-session/models': '/api/sessions/proof-session/models',
+  '/api/sessions/proof-session/model': '/api/sessions/proof-session/model'
+}
+function forward(req, res, path) {
+  const proxied = http.request(new URL(HOST_ROUTES[path], HOST), { method: req.method, headers: { ...req.headers, host: new URL(HOST).host } }, answer => {
     res.writeHead(answer.statusCode, answer.headers)
     answer.pipe(res)
   })
@@ -76,11 +81,9 @@ function forward(req, res, target) {
   req.pipe(proxied)
 }
 const json = (res, body, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
-const frontLog = path.join(out, 'front.log')
 const front = http.createServer(async (req, res) => {
   const url = req.url.split('?')[0]
-  fs.appendFileSync(frontLog, req.method + ' ' + url + '\n')
-  if (url.startsWith('/api/sessions/proof-session/model')) return forward(req, res, HOST)
+  if (Object.hasOwn(HOST_ROUTES, url)) return forward(req, res, url)
   if (url === '/api/sessions/proof-session') return json(res, await sessionJson())
   if (url === '/api/sessions') return json(res, roles[user] ? [] : [await sessionJson()])
   if (url === '/api/sessions/shared') return json(res, roles[user] ? [await sessionJson()] : [])
@@ -143,9 +146,6 @@ try {
   await wait(4_000)
   check('first turn reached the start model', requests().filter(r => r.stream).at(-1)?.model === 'gpt-6.1-sol', requests().filter(r => r.stream).at(-1)?.model)
 
-  // What the hub answers for the session's models, kept for the record.
-  fs.writeFileSync(path.join(out, 'pod-catalog.json'), await (await fetch(`http://127.0.0.1:${agentPort}/agenthub/models`, { headers: { 'X-Agent-Token': token } })).text())
-  fs.writeFileSync(path.join(out, 'catalog.json'), await (await fetch(HOST + '/api/sessions/proof-session/models')).text())
   await page.click('[data-model-switch-toggle]')
   await page.waitForSelector('[data-model-switch-option]', { timeout: 90_000 })
   const options = await page.locator('[data-model-switch-option]').evaluateAll(els => els.map(e => e.getAttribute('data-model-switch-option')))
@@ -218,9 +218,9 @@ try {
 } catch (error) {
   check('the run finished', false, error.message.split('\n')[0])
   await page.screenshot({ path: path.join(out, 'failure.png') }).catch(() => {})
-  fs.writeFileSync(path.join(out, 'failure.txt'), await page.textContent('body').catch(() => ''))
+  console.log('==== page text\n' + (await page.textContent('body').catch(() => '')).slice(0, 2000))
 }
-fs.writeFileSync(path.join(out, 'results.json'), JSON.stringify(results, null, 2))
+console.log(JSON.stringify(results, null, 2))
 await browser.close()
 agent.kill('SIGTERM')
 await wait(3_000)

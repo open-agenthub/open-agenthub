@@ -7,7 +7,7 @@
 // env:   CLIS, XTERM as for cli-switch.mjs; PROOF_RUNTIME=<worktree>/agent-runtime (default: ../../agent-runtime).
 //        Not RUNTIME: a session pod exports that for its own session agent, under /opt/session-agent.
 //
-// Per run it records, in <outdir>/result.json: the switch answer, the model of the turn after it,
+// Per run it prints, as JSON: the switch answer, the model of the turn after it,
 // whether that turn still carried the first one, the refusal while a turn runs (and that nothing
 // was typed for it), and the refusal of an id that is not one.
 import http from 'node:http'
@@ -38,9 +38,8 @@ const PLAN = {
 }[agent]
 if (!PLAN) throw new Error('agent must be claude, codex, opencode or openclaw')
 
-const log = path.join(out, 'model.jsonl')
-const mock = await startMock({ log, slowMs: 9_000 })
-const requests = () => fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line))
+const mock = await startMock({ slowMs: 9_000 })
+const requests = () => mock.requests()
 
 // The hub the session agent reports to: every call is logged by path, every answer is empty.
 const hubCalls = []
@@ -182,7 +181,6 @@ try {
   result.ok = false
   result.error = error.message
 }
-fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify(result, null, 2))
 console.log(JSON.stringify(result, null, 2))
 if (!result.ok) {
   console.log('==== last screen\n' + screen().split('\n').filter(line => line.trim()).join('\n'))

@@ -23,8 +23,7 @@ const [agent, stepsJson, outArg] = process.argv.slice(2)
 const steps = JSON.parse(stepsJson || '[]')
 const out = path.resolve(outArg || 'out-' + agent)
 fs.mkdirSync(out, { recursive: true })
-const log = path.join(out, 'model.jsonl')
-const mock = await startMock({ log })
+const mock = await startMock()
 
 // REUSE=<outdir of an earlier run> starts in that run's HOME and work dir: the restart half of
 // "switch on restart with resume", with the session's files as the first process left them.
@@ -75,7 +74,7 @@ for (const step of steps) {
   else if (step.wait) await wait(step.wait)
   else if (step.dump) { await wait(300); dump(step.dump) }
 }
-console.log('==== model requests (' + log + ')\n' + fs.readFileSync(log, 'utf8'))
+console.log('==== model requests\n' + mock.requests().map(entry => JSON.stringify(entry)).join('\n'))
 try { p.kill() } catch {}
 await wait(500)
 mock.close()

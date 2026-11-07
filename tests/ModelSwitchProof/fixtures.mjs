@@ -14,9 +14,13 @@ export function replyFor(entry) {
   return `MODEL=${entry.model} CONTEXT=${entry.markerInRequest ? 'KEPT' : 'NONE'}`
 }
 
-/** Starts the mock on a free port; `log` gets one JSON line per model request, never a header. */
-export async function startMock({ log, slowMs = 10_000 }) {
-  fs.writeFileSync(log, '')
+/**
+ * Starts the mock on a free port. `requests()` lists one entry per model request, never a header.
+ * Kept in memory and printed by the proofs, not written to a file: what a request carried goes
+ * nowhere but the run's own output.
+ */
+export async function startMock({ slowMs = 10_000 } = {}) {
+  const entries = []
   const server = http.createServer((req, res) => {
     let body = ''
     req.on('data', chunk => { body += chunk })
@@ -38,13 +42,13 @@ export async function startMock({ log, slowMs = 10_000 }) {
         : Array.isArray(content) ? content.map(part => part?.text || '').join('\n') : '').slice(-300)
       const entry = { at: new Date().toISOString(), url: req.url.split('?')[0], model: json.model, stream: !!json.stream,
         markerInRequest: text.includes(MARKER), lastUserText }
-      fs.appendFileSync(log, JSON.stringify(entry) + '\n')
+      entries.push(entry)
       const delay = lastUser.includes(SLOW) ? slowMs : 0
       setTimeout(() => answer(req, res, json, entry), delay)
     })
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
-  return { port: server.address().port, close: () => server.close() }
+  return { port: server.address().port, close: () => server.close(), requests: () => entries.slice() }
 }
 
 function answer(req, res, json, entry) {
