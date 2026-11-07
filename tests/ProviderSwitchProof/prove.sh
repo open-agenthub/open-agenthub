@@ -84,4 +84,9 @@ cleanup() {
 }
 trap cleanup EXIT
 npm install --prefix /tmp/provider-switch-tools ws@8.22.0 @xterm/headless@6.0.0 >/tmp/provider-switch-tools.log 2>&1
+if [ "${PROOF_RECOVERY:-0}" = 1 ]; then
+  # A Service VIP survives backend-pod deaths; port-forward pins a single pod instead.
+  proof_service_ip=$(kubectl -n agenthub get service agenthub-backend -o jsonpath='{.spec.clusterIP}')
+  export PROOF_BACKEND_URL="http://$proof_service_ip"
+fi
 PROOF_MODEL_URL="$proof_model_url" node tests/ProviderSwitchProof/prove.mjs

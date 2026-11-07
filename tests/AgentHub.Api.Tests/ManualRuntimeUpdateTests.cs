@@ -43,6 +43,7 @@ public class ManualRuntimeUpdateTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var env = Assert.Single(rig.CreatedPod!.Spec.Containers, item => item.Name == "agent").Env;
         Assert.Contains(env, item => item.Name == "AGENTHUB_REQUIRE_NATIVE_RESUME" && item.Value == "1");
+        Assert.Contains(env, item => item.Name == "AGENTHUB_NATIVE_SESSION_ID" && item.Value == rig.Record.AgentSessionId);
         Assert.Contains(env, item => item.Name == "AGENTHUB_PROMPT" && item.Value == "");
         Assert.Equal("conversation", rig.Record.AgentSessionId);
     }

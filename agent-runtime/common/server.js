@@ -603,6 +603,12 @@ function createCommonServer(options = {}) {
         setStateWithheld(true);
         return done && done(new Error('sign-in state withheld'));
       }
+      try {
+        if (typeof driver.checkpointNativeIdentity === 'function') {
+          const current = locateTranscript();
+          if (current) driver.checkpointNativeIdentity({ file: current, env, home, fs });
+        }
+      } catch (error) { return done && done(error); }
       const revision = signInPrivacy.revision();
       let directory;
       try {
