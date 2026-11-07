@@ -50,3 +50,14 @@ Real backend, `held-start.sh` on a database created by 1.21.1 with one session:
 `upgrade.sh`: fresh, 1.7.0 and 1.21.1 databases all became healthy with two branch replicas
 (≤ 2.2 s) and on restart (1.0 s); each recorded 35 scripts (the two MCP OAuth stores run only with
 `Mcp:PublicUrl`), and both upgraded catalogues are identical to the fresh one (622 lines).
+
+Repeated with `held-start.sh` on databases created by 1.21.1 and by 1.7.0, with the shared deadline:
+
+| Database | Start | Held | Result | Slowest read | Waiting relation locks |
+|---|---|---|---|---|---|
+| 1.21.1 / 1.7.0 | branch, first | `FOR UPDATE` on sessions, 20 s | 6 attempts, healthy at 23.4 / 23.9 s | 1 979 ms | AccessExclusive on sessions, in attempts of ≤ 2 s |
+| 1.21.1 / 1.7.0 | branch, second | `FOR UPDATE` on sessions, 30 s | healthy at 1.0 s | 10 ms | none |
+| 1.21.1 / 1.7.0 | branch, third | `ROW EXCLUSIVE` on all 54 tables, 30 s | healthy at 1.0 s | 10 ms | none |
+
+ROW EXCLUSIVE conflicts with SHARE and every stronger mode, so the third start took none of the
+locks that DDL needs, on any table.

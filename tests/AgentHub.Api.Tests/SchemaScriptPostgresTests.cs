@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using AgentHub.Api.Persistence;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using Xunit;
 
@@ -99,7 +100,7 @@ public sealed class SchemaScriptPostgresTests
             "CREATE TABLE IF NOT EXISTS t (id INT); ALTER TABLE t ADD COLUMN IF NOT EXISTS name TEXT;").WaitAsync(TimeSpan.FromSeconds(1));
     }
 
-    private sealed class Database : IAsyncDisposable
+    internal sealed class Database : IAsyncDisposable
     {
         private readonly string _base;
         private readonly string _name;
@@ -175,5 +176,30 @@ public sealed class SchemaScriptPostgresTests
             await using var command = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{_name}\" CASCADE", connection);
             await command.ExecuteNonQueryAsync();
         }
+    }
+}
+
+/// <summary>
+/// The script retries share <see cref="SchemaMigrationLock"/>'s budget, so the whole startup ends
+/// with the clear error before the chart's startup probe (630 s) kills the replica. In the
+/// startup collection because it takes the one schema migration lock.
+/// </summary>
+[Collection(nameof(StartupConcurrencyPostgresTests))]
+public sealed class SchemaScriptDeadlinePostgresTests
+{
+    [PostgreSqlFact]
+    public async Task Script_retries_stop_at_the_migration_lock_budget()
+    {
+        await using var db = await SchemaScriptPostgresTests.Database.CreateAsync();
+        await db.ExecAsync("CREATE TABLE t (id INT)");
+        await using var writer = await db.HoldAsync("SELECT * FROM t FOR UPDATE");
+
+        var started = Stopwatch.StartNew();
+        var error = await Assert.ThrowsAsync<TimeoutException>(() => SchemaMigrationLock.RunAsync(db.Configuration,
+            NullLogger.Instance, () => SchemaScript.ApplyAsync(db.DataSource, "t", "ALTER TABLE t ADD COLUMN IF NOT EXISTS name TEXT;"),
+            timeout: TimeSpan.FromSeconds(6)));
+
+        Assert.StartsWith("Schema script t could not lock its tables", error.Message);
+        Assert.True(started.Elapsed < TimeSpan.FromSeconds(10), $"took {started.Elapsed}");
     }
 }

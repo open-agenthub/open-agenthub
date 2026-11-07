@@ -32,6 +32,9 @@ public static class SchemaScript
     /// <summary>Set by <see cref="SchemaMigrationLock"/> for the migrations it runs, which have no logger of their own.</summary>
     internal static readonly AsyncLocal<ILogger?> Logger = new();
 
+    /// <summary>Set by <see cref="SchemaMigrationLock"/>: where its own budget ends, which no script's retries may pass.</summary>
+    internal static readonly AsyncLocal<DateTime?> Deadline = new();
+
     public static async Task ApplyAsync(NpgsqlDataSource db, string name, string sql, CancellationToken ct = default,
         SchemaScriptOptions? options = null)
     {
@@ -41,6 +44,9 @@ public static class SchemaScript
         if (await AppliedAsync(connection, name, ct) == hash) return;
 
         var log = Logger.Value;
+        var budget = Deadline.Value is { } deadline && deadline - DateTime.UtcNow < options.Budget
+            ? deadline - DateTime.UtcNow
+            : options.Budget;
         var started = Stopwatch.StartNew();
         var pause = options.FirstPause;
         for (var attempt = 1; ; attempt++)
@@ -56,9 +62,9 @@ public static class SchemaScript
             catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.LockNotAvailable)
             {
                 var holders = await LongTransactionsAsync(connection, ct);
-                if (started.Elapsed + pause >= options.Budget)
+                if (started.Elapsed + pause >= budget)
                     throw new TimeoutException(
-                        $"Schema script {name} could not lock its tables within {options.Budget.TotalSeconds:0} s " +
+                        $"Schema script {name} could not lock its tables within {Math.Max(0, budget.TotalSeconds):0} s " +
                         $"({attempt} attempts, {options.LockTimeout.TotalMilliseconds:0} ms each): another transaction " +
                         $"holds a conflicting lock. Open transactions: {holders}. End or wait for them and start again.", ex);
                 log?.LogWarning("Schema script {Name} waited {LockTimeoutMs} ms for a table lock and backed off " +

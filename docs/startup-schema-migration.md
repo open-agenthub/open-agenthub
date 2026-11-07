@@ -101,8 +101,23 @@ replicas too; and the new backend failed after the 30 s command timeout. Measure
   queued reads through before the next try. Each retry logs the store and the open transactions
   (pid, application name, state, age), and the final error says the same, because the lock-timeout
   error itself does not name the holder.
-- **The advisory lock stays.** It still keeps two replicas from racing the same script; the lock
-  timeout only bounds waits on ordinary traffic.
+- **The retries share the advisory lock's budget.** `SchemaMigrationLock` passes on where its
+  10 minutes end, and no script retries past that. Without that, a replica that waited for the
+  lock and then for a table could outlast the chart's startup probe (5 s × 126 = 630 s) and be
+  killed without saying why. The liveness probe only starts after the startup probe has passed.
+- **The advisory lock stays, and is polled.** It still keeps two replicas from racing the same
+  script. It is taken with `pg_try_advisory_lock` once a second, never with a blocking
+  `pg_advisory_lock`, so its wait is bounded and logged. Waiting for it holds no table lock, so
+  the running replicas' reads are not affected by a replica that waits; the lock timeout only
+  bounds waits on ordinary traffic.
+- **Every data statement in the scripts is one-shot by construction**, so running them once per
+  script version loses nothing. `sessions.agent_session_id` is backfilled and then made NOT NULL.
+  The `session_usage` billing classification only matches rows with usage and no billing, and
+  every current write sets billing with the usage. Every skill write sets `search_text`. The four
+  orphan prunes only ran before their foreign key existed. Work that must run at every start stays
+  outside the scripts: `SlackThreadStore.PruneDeletedAsync` and the startup work in `Program.cs`.
+  None of the scripts contains a statement that cannot run in a transaction (`CONCURRENTLY`,
+  `VACUUM`, `ALTER TYPE ... ADD VALUE`).
 
 Limits, on purpose:
 
