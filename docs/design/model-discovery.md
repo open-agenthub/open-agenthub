@@ -18,7 +18,7 @@ credential the session uses, not only on the CLI version.
 |---|---|---|---|
 | Claude Code 2.1.318 | SDK control request `initialize` on `claude -p --input-format stream-json --output-format stream-json`; the answer's `models[]` | By plan: a team subscription login added a 1M-context variant that a logged-out or API-key CLI does not list | Per model: id, resolved model, label, description, effort levels, adaptive thinking, fast mode. No request to the model service, so an API key's entitlement is not checked |
 | Codex 0.167.0 | `codex app-server` JSON-RPC `model/list` | Subscription login: yes. The CLI fetches `<backend>/codex/models` with the account's token and account id; two accounts got two different lists | A refusal (403) is **not** an error in `model/list`: the CLI logs `failed to refresh available models: unexpected status 403` and answers with its bundled list. API key: bundled list, no request at all |
-| Cursor (unpinned) | `cursor-agent models` ("List available models for this account") | Yes | Needs a valid login; an invalid key ends with `The provided API key is invalid` |
+| Cursor (unpinned) | `agent models` ("List available models for this account") | Yes | Needs a valid login; no login ends with `Authentication required`, an invalid key with `The provided API key is invalid`. The success format (`<id> - <name> (current, default)` under `Available models`) is read from the CLI's bundle, **not verified with a real account** |
 | OpenCode 1.18.35 | `opencode models --verbose` | Only by which providers are logged in | Catalog from the CLI's models database, with reasoning, attachment, tool-call and context limits. Not an entitlement check |
 | OpenClaw | — | — | Not offered: manual id only (see Limits) |
 | Custom endpoint (Claude, Codex, OpenCode) | `GET <endpoint>/models` from the pod, with the endpoint key | Yes, it is the server's own list | Codex lists its bundled models even when configured for an endpoint, so its CLI answer would be wrong there |
@@ -37,7 +37,14 @@ Two consequences shape the design:
 
 The probe runs in the session pod, as a second short-lived CLI process beside the interactive one,
 with the same HOME, environment and login the agent uses (`common/model-catalog.js`, route
-`GET /agenthub/models`). The interactive CLI is not touched. The result is normalised to a fixed
+`GET /agenthub/models`). The interactive CLI is not touched.
+
+The probe must not behave as a second agent. Claude's runs with `--setting-sources ''`,
+`--no-session-persistence`, `--strict-mcp-config` and without `CLAUDE_CODE_PLUGIN_DIRS`: with the
+session's settings it fired the SessionStart and SessionEnd hooks (which report to the hub), and
+the fleet mod would compete for the session's inbox. A negative control in the proof shows both
+hooks running without these flags. `--bare` was rejected: it also stops reading the OAuth login,
+which is what makes the list account-aware. The result is normalised to a fixed
 set of fields and bounded (200 models, 2 KiB of text per model) before it leaves the pod.
 
 Rejected alternatives:
@@ -78,7 +85,9 @@ Rejected alternatives:
 `ModelName` already existed for custom endpoints. It now means "the model the session starts on"
 for every auth mode: required for a custom endpoint as before, optional otherwise (empty = the
 CLI's default). The pod gets it as `AGENTHUB_MODEL_NAME` and each runtime maps it: Claude
-`ANTHROPIC_MODEL`, Codex `-c model=…`, Cursor `--model`, OpenCode `AGENTHUB_OPENCODE_MODEL`.
+`ANTHROPIC_MODEL` in the CLI child's environment, Codex a top-level `model` in `config.toml`
+(an argument would break the driver's resume-command recognition), Cursor `--model`, OpenCode
+the user config's `model`, ahead of the image-wide `AGENTHUB_OPENCODE_MODEL`.
 OpenClaw refuses it at create, like a custom endpoint. Changing it in the edit dialog applies on
 the next restart, like every other start setting; switching mid-conversation stays the CLI's own
 `/model`, which the composer already sends.
@@ -101,4 +110,35 @@ the next restart, like every other start setting; switching mid-conversation sta
   use fails at the first turn, as before. The catalog says "not verified".
 - OpenClaw has no probe; its id stays manual.
 - Cursor is unpinned, so its output format can change under the probe; an unparseable answer is
-  an `error`, not an empty list.
+  an `error`, not an empty list, and the field stays free text. Its success path is unverified
+  with a real account.
+- Claude answers from the account options it cached in `~/.claude.json` at its last start and
+  refreshes them in the background; the probe after that sees the update.
+- The probe shares HOME with the interactive CLI. Two processes on one login is what the CLIs
+  support anyway (a person running a second `claude` in the shell does the same), but Codex's
+  probe starts its app-server, which also reads the plugin and account routes once.
+- A Workspace picker that switches the running session is not part of this change: the CLI's own
+  `/model` does that today. A follow-up could offer the list there.
+
+## Verification
+
+- Session agent (`session-agent/test/model-catalog.test.js`): every probe's parsing, the field
+  whitelist (no e-mail, organisation, provider URL, header or option), masking of credential values
+  and token shapes, the per-credential cache (switch, refresh, error, single flight), the route.
+- Backend (`ModelDiscoveryTests`): validation and update/copy rules of the chosen model, the pod
+  env, catalog keys (owner always part of the key), sanitising the pod's answer, a transient error
+  keeping the last good list, viewer read-only access, the pod-only proxy. With Postgres: the real
+  store keeps owners apart, and a viewer reads through the real share store and access rules. That
+  test caught that the access check returns a partial session row; the controller now reads the
+  full row.
+- Real CLIs (`tests/ModelDiscoveryProof`): Codex 0.167.0 in the real `common/server.js` against a
+  recording mock — the post-start push, account A, an account switch through
+  `PUT /agenthub/credentials` answering for B without a refresh flag, a refused account as
+  `fallback`/`not_entitled`, a custom endpoint listed from the pod and its refused key, and no
+  credential in any response, hub request or log. Claude 2.1.318 (API key against the mock,
+  hooks and plugin with a negative control), Cursor's login errors, OpenCode 1.18.35 with a key in
+  a custom provider's options.
+- Chromium against the real catalog, session and internal controllers on Postgres, the real
+  session agent and the real Codex CLI: the new-session dialog for account 1, a switch to account 2
+  and Refresh, a refused account, an unlisted typed id kept, a custom endpoint looked up without a
+  single request from the hub to it, 390 px, and a viewer reading without refresh or account ids.

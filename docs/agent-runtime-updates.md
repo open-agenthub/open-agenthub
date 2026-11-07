@@ -206,6 +206,15 @@ PTY. After a bump, read the menu of the new version the same way and update the 
 `cli` label. A stale list fails nothing: a removed command is still offered and the CLI answers it
 as unknown, a new one is missing from the completion but still runs when typed.
 
+### Model list probes
+
+Each runtime's `model-catalog.js` asks the pinned CLI for the account's models
+(`docs/design/model-discovery.md`): Claude's SDK `initialize`, Codex's app-server `model/list`
+and its "failed to refresh available models" stderr line, Cursor's `agent models` text, OpenCode's
+`models --verbose`. After a bump run `tests/ModelDiscoveryProof` against the new version. A changed
+answer shows up as an `error` catalog, never as a wrong list, and the picker stays free text; a
+Claude bump must also keep the probe from running the session's hooks (the proof's control).
+
 ## The nightly job
 
 [`update-agent-runtimes.yml`](../.github/workflows/update-agent-runtimes.yml) runs at
