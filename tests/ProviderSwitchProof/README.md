@@ -41,3 +41,8 @@ therefore waits for actual upstream bytes before accepting the connection and se
 a successful upgrade alone can be followed by an upstream startup failure. Native admission
 refuses a missing screen size. Bounded explicit owner retries cover a transient busy safe
 point, but do not bypass guards or replay a stopped source/uncertain target.
+
+Credential evidence combines resolved container environment, native auth files, absence of
+opposite-provider mounts/key files, and the recording model's accepted credential mode.
+The non-root container can deny `/proc/1/environ`; the proof respects that boundary and
+never adds privilege or disables isolation to inspect credentials.
