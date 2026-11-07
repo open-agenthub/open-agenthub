@@ -17,6 +17,10 @@ on:
         description: "Prove real CLI provider replacement on a real persistent workspace"
         type: boolean
         default: false
+      prove_provider_recovery:
+        description: "Crash backend replicas at every saved native replacement phase"
+        type: boolean
+        default: false
       prove_workspace_pvc:
         description: "Prove persistent session workspace mounts and pause/resume on real kubelet"
         type: boolean
@@ -111,7 +115,7 @@ jobs:
           cache-from: type=gha,scope=artifact-renderer-amd64
 
       - name: Build native Claude for provider replacement proof
-        if: github.event_name == 'workflow_dispatch' && inputs.prove_provider_switch
+        if: github.event_name == 'workflow_dispatch' && (inputs.prove_provider_switch || inputs.prove_provider_recovery)
         uses: docker/build-push-action@v7
         with:
           context: ./agent-runtime
@@ -122,7 +126,7 @@ jobs:
           cache-from: type=gha,scope=agent-runtime-claude-amd64
 
       - name: Build native Codex for provider replacement proof
-        if: github.event_name == 'workflow_dispatch' && inputs.prove_provider_switch
+        if: github.event_name == 'workflow_dispatch' && (inputs.prove_provider_switch || inputs.prove_provider_recovery)
         uses: docker/build-push-action@v7
         with:
           context: ./agent-runtime
@@ -178,7 +182,9 @@ jobs:
         run: bash tests/ProviderWorkspaceProof/prove.sh
 
       - name: Prove real native provider replacement
-        if: github.event_name == 'workflow_dispatch' && inputs.prove_provider_switch
+        if: github.event_name == 'workflow_dispatch' && (inputs.prove_provider_switch || inputs.prove_provider_recovery)
+        env:
+          PROOF_RECOVERY: ${{ inputs.prove_provider_recovery && '1' || '0' }}
         run: bash tests/ProviderSwitchProof/prove.sh
 
       - name: Upgrade in place keeps the release healthy

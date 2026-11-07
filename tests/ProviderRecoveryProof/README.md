@@ -38,3 +38,26 @@ Restoring into a different pathname while leaving the old home accessible can ma
 read/write the old file while the transcript route observes the restored copy. Such a run
 does not prove archive recovery. Retire the old directory, create an empty home at its old
 pathname, and restore only the actual archive plus selected synthetic credentials/config.
+
+## External persisted-phase crash barriers
+
+`gates.sql` installs a trigger only in the disposable proof database. Before a selected
+journal update commits, it holds an observable advisory lock while the previous phase stays
+visible. `barriers.mjs` checks the barrier against an isolated real PostgreSQL database: kill
+the blocked backend connection, verify rollback, then release and continue. This self-test
+proves the fault mechanism, not application recovery.
+
+Dispatch `install-smoke` with `prove_provider_recovery=true` for the actual-worker matrix.
+It enables the same real native replacement rig and kills a real backend pod at ten write
+boundaries per replacement, including both sides of source-stop acknowledgement, and two
+cancellation boundaries. Two backend replicas must recover from the saved phase without
+changing authority twice. The stable backend Service address survives pod death; a port
+forward pins one backend and cannot serve as the recovery transport. Owner start/retry/cancel
+requests retry only their same idempotency key after a lost reply; message sends are not
+blindly retried. After each completed replacement, pause/resume the actual native generation
+and send a new owner turn, retaining one handover and the same native identity/PVC/history.
+
+The fault trigger is never installed by the application or exposed as a public control. It
+is released/dropped during proof cleanup. Record real dispatch outcomes before claiming the
+phase matrix passed. Additional runtime/pod/storage/auth faults remain separate acceptance
+rows; backend phase crashes do not establish them.
