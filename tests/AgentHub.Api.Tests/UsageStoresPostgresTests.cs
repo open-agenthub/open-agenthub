@@ -225,7 +225,8 @@ public class UsageStoresPostgresTests
         await db.AddSessionAsync("old-api", "alice", AgentAuthMode.ApiKey);
         await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "old-sub", CostUsd = 3, InputTokens = 10 });
         await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "old-api", CostUsd = 2, InputTokens = 10 });
-        await db.ExecuteAsync("UPDATE session_usage SET billing = NULL, api_cost_usd = 0, usage_source = NULL");
+        // As a database from before the split: its rows unclassified, and no record of the script.
+        await db.ExecuteAsync("UPDATE session_usage SET billing = NULL, api_cost_usd = 0, usage_source = NULL; DELETE FROM schema_scripts");
 
         await db.Usage.InitializeAsync();
 

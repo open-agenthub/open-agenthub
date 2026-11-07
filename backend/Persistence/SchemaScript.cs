@@ -135,11 +135,13 @@ public static class SchemaScript
 public sealed record SchemaScriptOptions(TimeSpan LockTimeout, TimeSpan FirstPause, TimeSpan MaxPause, TimeSpan Budget)
 {
     /// <summary>
-    /// Two seconds is what a migration may add to a live read; three minutes keeps the attempts of
+    /// Two seconds is what a migration may add to a live read. Pauses of up to five seconds give the
+    /// readers queued behind an attempt at least twice its window, yet pick up a released lock
+    /// within seconds during a rolling update. Three minutes keeps the attempts of
     /// one script well inside <see cref="SchemaMigrationLock.DefaultTimeout"/> and the chart's
     /// startup probe, so a replica that cannot migrate says why instead of being killed silently.
     /// </summary>
     public static readonly SchemaScriptOptions Default = new(
         LockTimeout: TimeSpan.FromSeconds(2), FirstPause: TimeSpan.FromMilliseconds(500),
-        MaxPause: TimeSpan.FromSeconds(10), Budget: TimeSpan.FromMinutes(3));
+        MaxPause: TimeSpan.FromSeconds(5), Budget: TimeSpan.FromMinutes(3));
 }
