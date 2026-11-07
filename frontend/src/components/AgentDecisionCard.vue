@@ -4,6 +4,8 @@ import {
   accountLimitLabel, accountOptionLabel, accountsFor, agentOptions, authOptions, credentialReadiness, customEndpointProtocol,
   defaultAccountId, isAccountExhausted, needsOpenClawApiKeySource, openClawApiKeySourceOptions, supportsCustomEndpoint
 } from '../lib/agent.js'
+import { supportsModelChoice } from '../lib/model-catalog.js'
+import ModelPicker from './ModelPicker.vue'
 
 const props = defineProps({
   agent: { type: String, required: true },
@@ -22,6 +24,8 @@ const props = defineProps({
 const emit = defineEmits(['update:agent', 'update:authMode', 'update:openClawApiKeySource', 'update:credentialId',
   'update:modelEndpointUrl', 'update:modelName'])
 const showEndpoint = computed(() => props.authMode === 'CustomEndpoint')
+// The endpoint group carries its own model field; every other mode gets the picker on its own.
+const showModel = computed(() => !showEndpoint.value && supportsModelChoice(props.agent))
 const visibleAgents = computed(() => props.options || agentOptions)
 const billingOptions = computed(() => authOptions(props.agent, props.legacyAuthMode))
 const showOpenClawSource = computed(() => needsOpenClawApiKeySource(props.agent, props.authMode))
@@ -91,8 +95,8 @@ function chooseAgent(agent) {
       <div class="decision-label">Model endpoint</div>
       <input data-endpoint-url class="mono" :value="modelEndpointUrl" aria-label="Model endpoint URL"
         placeholder="https://llm.example.com/v1" @input="$emit('update:modelEndpointUrl', $event.target.value)" />
-      <input data-endpoint-model class="mono" :value="modelName" aria-label="Model name"
-        placeholder="model id, e.g. qwen3-coder-30b" @input="$emit('update:modelName', $event.target.value)" />
+      <ModelPicker data-endpoint-model :agent="agent" auth-mode="CustomEndpoint" :model-endpoint-url="modelEndpointUrl"
+        :model-value="modelName" placeholder="model id, e.g. qwen3-coder-30b" @update:model-value="$emit('update:modelName', $event)" />
       <small data-endpoint-protocol>{{ customEndpointProtocol(agent) }} The key is the custom endpoint API key in
         Credentials. A server inside the cluster must be allowed by the operator.</small>
     </div>
@@ -107,6 +111,11 @@ function chooseAgent(agent) {
       </select>
       <small>Which stored {{ agent }} login this session uses. A running session can be switched from its header.
         <template v-if="providerAccounts.some(isAccountExhausted)"> An account marked “at limit” is skipped for new sessions unless you pick it here.</template></small>
+    </div>
+    <div v-if="showModel" class="decision-group source-group" data-model-choice>
+      <div class="decision-label">Model</div>
+      <ModelPicker :agent="agent" :auth-mode="authMode" :credential-id="credentialId" :model-value="modelName"
+        placeholder="empty = the CLI's default" @update:model-value="$emit('update:modelName', $event)" />
     </div>
     <p class="readiness" :class="{ ready: readiness.ready }" data-readiness aria-live="polite">{{ readiness.text }}</p>
   </div>
@@ -130,7 +139,7 @@ function chooseAgent(agent) {
 small { display: block; margin-top: 5px; color: var(--muted-3); font-size: 11px; }
 .source-group { grid-column: 1 / -1; }
 .source-group select { max-width: 100%; }
-.endpoint-group input { display: block; width: 100%; margin-bottom: 6px; }
+.endpoint-group > input { display: block; width: 100%; margin-bottom: 6px; }
 .readiness { grid-column: 1 / -1; margin: 0; padding-top: 10px; border-top: 1px solid var(--border); color: var(--warn); font-size: 12px; line-height: 1.45; }
 .readiness.ready { color: var(--ok); }
 @media (max-width: 600px) {

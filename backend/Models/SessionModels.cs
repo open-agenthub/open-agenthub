@@ -140,9 +140,16 @@ public static class AgentConfiguration
         model = string.IsNullOrWhiteSpace(model) ? null : model.Trim();
         if (authMode != AgentAuthMode.CustomEndpoint)
         {
-            if (url is not null || model is not null)
-                throw new ArgumentException("A model endpoint and model name only apply to CustomEndpoint authentication.");
-            return (null, null);
+            if (url is not null)
+                throw new ArgumentException("A model endpoint only applies to CustomEndpoint authentication.");
+            // Optional on a provider account (#461): the model the session starts on, empty for
+            // the CLI's default. OpenClaw picks its model from the provider key at start
+            // (openclaw/select-model.js) and nothing here would pass a choice on.
+            if (model is null) return (null, null);
+            if (!SupportsModelChoice(agent))
+                throw new ArgumentException($"{agent} sessions cannot choose a model at create yet; leave the model empty.");
+            ValidateModelName(model);
+            return (null, model);
         }
 
         if (!SupportsCustomEndpoint(agent))
@@ -163,12 +170,22 @@ public static class AgentConfiguration
             throw new ArgumentException("Store the endpoint's key as the custom endpoint API key, not in the URL.");
         if (!string.IsNullOrEmpty(parsed.Query) || !string.IsNullOrEmpty(parsed.Fragment))
             throw new ArgumentException("Give the endpoint's API base without query or fragment, e.g. https://llm.example.com/v1.");
-        // The name lands in a TOML string, a JSON object key and an environment variable. The
-        // runtimes escape it, but no model id needs whitespace or control characters, and refusing
-        // them here keeps a confusing pod failure from being the first report.
-        if (model.Length > MaxModelNameLength || model.Any(c => char.IsWhiteSpace(c) || char.IsControl(c)))
-            throw new ArgumentException($"The model name must be at most {MaxModelNameLength} characters, without spaces.");
+        ValidateModelName(model);
         return (url.TrimEnd('/'), model);
+    }
+
+    /// <summary>The agents whose runtime passes a chosen model to its CLI (docs/design/model-discovery.md).</summary>
+    public static bool SupportsModelChoice(AgentKind agent) =>
+        agent is AgentKind.Claude or AgentKind.Codex or AgentKind.Cursor or AgentKind.OpenCode;
+
+    // The name lands in a TOML string, a JSON object key, a CLI argument and an environment
+    // variable. The runtimes escape it, but no model id needs whitespace or control characters,
+    // and refusing them here keeps a confusing pod failure from being the first report. A leading
+    // "-" would read as an option on Cursor's command line.
+    private static void ValidateModelName(string model)
+    {
+        if (model.Length > MaxModelNameLength || model.Any(c => char.IsWhiteSpace(c) || char.IsControl(c)) || model.StartsWith('-'))
+            throw new ArgumentException($"The model name must be at most {MaxModelNameLength} characters, without spaces, and not start with '-'.");
     }
 
     private static void ValidateOpenClawApiKeySource(AgentKind agent, AgentAuthMode authMode,
@@ -721,7 +738,10 @@ public static class SessionDuplication
             // Configuration like the agent itself, so a copy that stays on the endpoint keeps it;
             // one switched to another mode would be refused for carrying it.
             ModelEndpointUrl = authMode == AgentAuthMode.CustomEndpoint ? source.ModelEndpointUrl : null,
-            ModelName = authMode == AgentAuthMode.CustomEndpoint ? source.ModelName : null,
+            // A chosen provider model follows the copy while agent and endpoint-ness stay; another
+            // agent's or an endpoint's id would be wrong for the new configuration.
+            ModelName = (authMode == AgentAuthMode.CustomEndpoint) == (source.AuthMode == AgentAuthMode.CustomEndpoint)
+                && (authMode == AgentAuthMode.CustomEndpoint || agent == source.Agent) ? source.ModelName : null,
             Policy = request.Policy ?? DeserializeOptional<AgentPolicy>(source.AgentPolicyJson),
             // An explicit structured policy, including an empty default-deny policy,
             // supersedes legacy AllowedTools instead of rehydrating it later.

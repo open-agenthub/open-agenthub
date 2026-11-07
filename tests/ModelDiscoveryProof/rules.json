@@ -1,0 +1,2 @@
+{ "acct-1": { "ids": ["gpt-6.1-sol", "gpt-6-luna"] }, "acct-2": { "ids": ["gpt-6-astra"] }, "acct-deny": { "status": 403 },
+  "sk-test-A": { "ids": ["mock-a1", "mock-a2"] }, "sk-test-B": { "ids": ["mock-b1"] }, "sk-test-deny": { "status": 403 } }

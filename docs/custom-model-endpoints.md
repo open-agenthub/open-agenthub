@@ -12,7 +12,8 @@ that were rejected.
 carries two fields, `ModelEndpointUrl` (the API base, e.g. `https://llm.example.com/v1`) and
 `ModelName` (the id the server serves), on `CreateSessionRequest`, `UpdateSessionRequest`,
 `DuplicateSessionRequest` (copied while the mode stays) and `SessionInfo`. Both are stored on the
-session row (`model_endpoint_url`, `model_name`).
+session row (`model_endpoint_url`, `model_name`). Since #461 `ModelName` is also the optional model
+of a provider-account session (`design/model-discovery.md`); the URL stays endpoint-only.
 
 The alternative was a new `AgentKind` ("Local"). It was rejected because the harness does not
 change: a Claude Code session on a local model is still Claude Code, with its hooks, policy,

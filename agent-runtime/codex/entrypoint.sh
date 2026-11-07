@@ -19,6 +19,12 @@ umask 077
 # itself (checked with `codex mcp add`), but one would hold the MCP servers' literal header values.
 rm -f "$CODEX_HOME"/config.toml?*
 printf '%s\n' 'cli_auth_credentials_store = "file"' > "$CODEX_HOME/config.toml"
+# The model chosen at create (#461), a top-level key, so before any table. A custom endpoint's
+# model is written with its provider below instead. JSON's string escapes are valid TOML ones, and
+# the backend admits no whitespace or control characters in the id.
+if [ "${AGENTHUB_AUTH_MODE:-}" != "customendpoint" ] && [ -n "${AGENTHUB_MODEL_NAME:-}" ]; then
+  node -e 'process.stdout.write("model = " + JSON.stringify(process.env.AGENTHUB_MODEL_NAME.trim()) + "\n")' >> "$CODEX_HOME/config.toml"
+fi
 # Straight after the first line: the provider selection is top-level keys, which have to come
 # before the first table header below (docs/custom-model-endpoints.md).
 if [ "${AGENTHUB_AUTH_MODE:-}" = "customendpoint" ]; then

@@ -135,7 +135,8 @@ function listGoModels(env) {
 }
 
 function defaultModel(env, auth, list = listGoModels) {
-  const override = (env.AGENTHUB_OPENCODE_MODEL || '').trim();
+  // The model chosen at create (#461) wins over the operator's image-wide override.
+  const override = (env.AGENTHUB_MODEL_NAME || env.AGENTHUB_OPENCODE_MODEL || '').trim();
   if (override) return override;
   if (!goProviderFor(env, auth)) return null;
   try {

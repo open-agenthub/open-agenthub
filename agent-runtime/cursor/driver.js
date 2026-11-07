@@ -20,6 +20,12 @@ function sessionId(env) {
   return env.AGENTHUB_CURSOR_SESSION_ID || env.AGENTHUB_CLAUDE_SESSION_ID || '';
 }
 
+// The model chosen at create (#461). Before the variadic prompt, like every other option.
+function modelArgs(env) {
+  const model = String(env.AGENTHUB_MODEL_NAME || '').trim();
+  return model ? ['--model', model] : [];
+}
+
 function buildCommand(env, allowResume) {
   const mode = (env.AGENTHUB_MODE || 'interactive').toLowerCase();
   const prompt = env.AGENTHUB_PROMPT || '';
@@ -32,7 +38,7 @@ function buildCommand(env, allowResume) {
     // remaining argument. Without it the TUI stops on its workspace-trust question, so a session
     // created with a task would sit on a dialog instead of working — the non-interactive branch
     // below has passed it for the same reason since it was written.
-    const args = ['--trust', '--disable-auto-update'];
+    const args = ['--trust', '--disable-auto-update', ...modelArgs(env)];
     if (restoredResume) args.push('--resume', chatId);
     // `agent [options] [prompt...]` — the CLI documents the positional as the agent's initial
     // prompt and stays interactive with it, so a session created by an API arrives with its task
@@ -60,6 +66,7 @@ function buildCommand(env, allowResume) {
   // question, not a per-call permission. Gating it would leave the session stuck on a trust
   // prompt rather than asking anyone anything.
   if (env.AGENTHUB_HAS_MCP === '1') args.push('--approve-mcps');
+  args.push(...modelArgs(env));
   if (restoredResume) args.push('--resume', chatId);
   args.push(prompt);
   return { cmd: 'agent', args };
@@ -102,6 +109,7 @@ const limitPatterns = [
 ];
 
 module.exports = {
+  modelCatalog: require('./model-catalog'),
   slashCommands: require('./slash-commands'),
   // authFilename: CLI file store (AGENT_CLI_CREDENTIAL_STORE=file, domain "cursor")
   // writes auth.json — confirmed from CLI package 2026.07.23-e383d2b source.
