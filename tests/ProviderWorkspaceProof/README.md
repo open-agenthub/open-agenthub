@@ -3,7 +3,7 @@
 Run `Quickstart install` with `workflow_dispatch`, the issue branch ref and
 `prove_workspace_pvc=true`. This uses the checkout backend, the published installer,
 a real k3s kubelet and local-path provisioner. The explicit proof changes the disposable
-installation's runtime image to a small Git/httpd image and enables 64Mi session workspaces.
+installation's runtime image to a small Git/Node HTTP image and enables 64Mi session workspaces.
 It keeps the real production pod factory, bootstrap init, database, API authentication,
 owner credentials, claim admission, lifecycle locks, pause/resume and central deletion.
 

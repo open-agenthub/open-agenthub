@@ -68,6 +68,15 @@ try {
   await api('sessions/' + id, 'GET', undefined, 404);
   id = null;
   console.log('PASS: actual backend, kubelet and local-path PVC; dirty two-repository bytes and Git metadata survive pause/resume and flag disable; new pod UID, same claim UID, central deletion removes claim.');
+} catch (error) {
+  if (id) {
+    try { console.error('Session pod status:', JSON.stringify(json('-n', ns, 'get', 'pod', 'session-' + id).status)); } catch {}
+    for (const container of ['prepare-tmp', 'git-clone', 'agent']) {
+      try { console.error(container + ':', kubectl('-n', ns, 'logs', 'session-' + id, '-c', container, '--tail=40')); } catch {}
+    }
+    try { console.error('Claim statuses:', JSON.stringify(json('-n', ns, 'get', 'pvc').items.map(item => ({ name: item.metadata.name, status: item.status })))); } catch {}
+  }
+  throw error;
 } finally {
   if (id) { try { await api('sessions/' + id, 'DELETE', undefined, 204); } catch { console.error('Proof session cleanup failed; inspect retained registry and PVC before deleting the disposable cluster.'); } }
 }
