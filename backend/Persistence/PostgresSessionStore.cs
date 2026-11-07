@@ -541,7 +541,8 @@ public sealed class PostgresSessionStore : ISessionStore
         Mode = Enum.Parse<SessionMode>(r.GetString(3)),
         RepoUrl = r.IsDBNull(4) ? null : r.GetString(4),
         Schedule = r.IsDBNull(5) ? null : r.GetString(5),
-        AgentSessionId = r.GetString(6),
+        // Older or partially migrated rows can lack a native ID; history reads need no resume target.
+        AgentSessionId = r.IsDBNull(6) ? "" : r.GetString(6),
         Agent = Enum.Parse<AgentKind>(r.GetString(7)),
         AuthMode = Enum.Parse<AgentAuthMode>(r.GetString(8)),
         OpenClawApiKeySource = r.IsDBNull(9) ? null : Enum.Parse<OpenClawApiKeySource>(r.GetString(9)),

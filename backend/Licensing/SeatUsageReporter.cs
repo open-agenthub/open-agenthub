@@ -56,15 +56,22 @@ public sealed class SeatUsageReporter(
         }
 
         var seats = await users.CountLicensedAsync(ct);
+        // The license service binds a license to one instance and refuses reports from any
+        // other, so a copied token stops renewing elsewhere. The same key is already sent at
+        // checkout and claim; a service that predates the binding ignores the extra field.
+        var instanceKey = await store.GetOrCreateInstanceKeyAsync(ct);
 
         var client = httpFactory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        using var resp = await client.PostAsJsonAsync($"{_serviceUrl}/api/usage/report", new { seats }, ct);
+        using var resp = await client.PostAsJsonAsync($"{_serviceUrl}/api/usage/report",
+            new SeatReport(seats, instanceKey), ct);
         var body = await resp.Content.ReadAsStringAsync(ct);
 
         if (!resp.IsSuccessStatusCode)
         {
-            // 403 = subscription no longer active; the token will lapse and gate features off.
+            // 403 = subscription no longer active, 409 = license bound to another instance,
+            // 401 = token expired too long ago. Either way the stored token lapses and gates
+            // features off; the service's message says which.
             log.LogWarning("Seat report rejected ({Status}) — {Body}", (int)resp.StatusCode, body);
             return;
         }
@@ -96,6 +103,9 @@ public sealed class SeatUsageReporter(
             log.LogWarning("Seat report accepted but no token was returned.");
         }
     }
+
+    /// <summary>Body of POST /api/usage/report (serialized camelCase).</summary>
+    public sealed record SeatReport(int Seats, string InstanceKey);
 
     /// <summary>Extracts the scheduled cancellation date from a report response, or null.</summary>
     public static DateTime? ParseCancelAt(string json)
