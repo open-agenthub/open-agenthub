@@ -52,6 +52,9 @@ ingress:
   bodySize: 55m
 
 backend:
+  # Existing ConfigMap in the release namespace with a PEM CA bundle under ca.crt.
+  # Adds backend outbound TLS trust; restart the deployment after changing the bundle.
+  trustedCaConfigMap: ""
   replicas: 2
   environment: Production
   # Narrow these to the ingress source ranges; all pods in these networks are trusted proxies.
@@ -396,6 +399,7 @@ chat:
 telemetry:
   enabled: true
   # Optional OTLP endpoint base override (the exporter appends "/v1/metrics").
+  # A custom collector receives no session credential and does not feed AgentHub usage.
   # Empty = the internal backend service (http://agenthub-backend.<ns>.svc.cluster.local/internal/otel).
   otlpEndpoint: ""
 
