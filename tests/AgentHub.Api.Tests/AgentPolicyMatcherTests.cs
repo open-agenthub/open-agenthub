@@ -72,6 +72,21 @@ public class AgentPolicyMatcherTests
         Assert.Equal("deny", AgentPolicyMatcher.Decide(Policy, "Bash", input.RootElement).Decision);
     }
 
+    /// <summary>#504: Claude honours an mcp__ entry in the general allow list (--allowedTools);
+    /// Codex and OpenCode, decided here, refused the same tool.</summary>
+    [Theory]
+    [InlineData("mcp__agenthub_sessions__container_run", "allow")]
+    [InlineData("mcp__docs__anything", "allow")]
+    [InlineData("mcp__agenthub_sessions__container_stop", "deny")]
+    [InlineData("mcp__other__tool", "deny")]
+    public void Decide_HonoursMcpEntriesInTheGeneralAllowList(string tool, string expected)
+    {
+        var legacy = new AgentPolicy { AllowedTools = ["mcp__agenthub_sessions__container_run", "mcp__docs__*", "Read"] };
+        using var input = JsonDocument.Parse("{}");
+
+        Assert.Equal(expected, AgentPolicyMatcher.Decide(legacy, tool, input.RootElement).Decision);
+    }
+
     [Fact]
     public void Decide_EmptyPolicyIsDefaultDeny()
     {
