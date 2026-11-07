@@ -2489,7 +2489,7 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
         try { if (_executions is not null) history = await _executions.ReadAsync(owner, id, ct); }
         catch (Exception error) when (!ct.IsCancellationRequested && ExecutionHistoryUnavailable(error))
         {
-            _log.LogWarning(error, "Could not read execution history for session {SessionId}; using the existing transcript.", id);
+            _log.LogWarning(error, "Could not read execution history; using the existing transcript.");
         }
         if (history is { Current.Generation: > 0 })
             return await TranscriptReader.ReadTranscriptAsync(
@@ -2534,7 +2534,7 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
         {
             // The ledger is a lazy addition to existing sessions, not a prerequisite for
             // reading a working native conversation during a schema or permissions rollout.
-            _log.LogWarning(error, "Could not adapt execution history for session {SessionId}; keeping the current conversation.", id);
+            _log.LogWarning(error, "Could not adapt execution history; keeping the current conversation.");
             return current;
         }
     }
