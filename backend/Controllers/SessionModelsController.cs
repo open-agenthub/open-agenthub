@@ -17,7 +17,7 @@ namespace AgentHub.Api.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/sessions/{id}/models")]
-public sealed class SessionModelsController(ISessionAccessService access, ISessionModelCatalogs catalogs,
+public sealed class SessionModelsController(ISessionAccessService access, ISessionStore sessions, ISessionModelCatalogs catalogs,
     IModelCatalogStore store, TimeProvider? time = null) : ControllerBase
 {
     private readonly TimeProvider _time = time ?? TimeProvider.System;
@@ -30,7 +30,11 @@ public sealed class SessionModelsController(ISessionAccessService access, ISessi
         if (principal is null) return Unauthorized();
         var resolved = await access.ResolveUserAsync(principal, id, ct);
         if (resolved is null || resolved.Level == SessionAccessLevel.None) return NotFound();
-        var session = resolved.Session;
+        // The access check carries only the columns sharing needs; agent, auth mode, model and
+        // the mounted account come from the full row. Without it every shared session would be
+        // read as the default agent on no account.
+        var session = await sessions.GetByIdAsync(resolved.Session.Id, ct);
+        if (session is null) return NotFound();
         var canProbe = resolved.Level >= SessionAccessLevel.Collaborator;
         if (refresh && !canProbe) return StatusCode(403, new { error = "refresh_not_allowed" });
 

@@ -193,7 +193,7 @@ public class ModelDiscoveryTests
         var session = Record(AgentKind.Codex, AgentAuthMode.Subscription, "m-1", account: "acct-secret-id");
         await store.PutAsync(ModelCatalogKey.ForSession(session), Catalog("m-1"), DateTimeOffset.UtcNow);
         var probes = new Probes();
-        var controller = new SessionModelsController(new Access { Resolved = new(session, level, null) }, probes, store)
+        var controller = new SessionModelsController(new Access { Resolved = new(session, level, null) }, SessionList(session), probes, store)
         { ControllerContext = UserContext("someone") };
 
         var view = View(await controller.Read("s1", refresh: false, default));
@@ -214,7 +214,7 @@ public class ModelDiscoveryTests
     [Fact]
     public async Task NoAccessIsNotFound()
     {
-        var controller = new SessionModelsController(new Access(), new Probes(), new Store()) { ControllerContext = UserContext("x") };
+        var controller = new SessionModelsController(new Access(), SessionList(), new Probes(), new Store()) { ControllerContext = UserContext("x") };
         Assert.IsType<NotFoundResult>(await controller.Read("s1", false, default));
     }
 
@@ -267,6 +267,54 @@ public class ModelDiscoveryTests
 
         var none = await controller.Refresh(AgentKind.Codex, AgentAuthMode.Subscription, "acct-9", null, default);
         Assert.Equal(409, Assert.IsType<ConflictObjectResult>(none).StatusCode);
+    }
+
+    // ---------- the real store and sharing rules ----------
+
+    [PostgreSqlFact]
+    public async Task ThePostgresStoreKeepsOwnersApartAndViewersReadWithoutRefresh()
+    {
+        await using var database = await PostgresSharingDatabase.CreateAsync(pooling: false);
+        var store = new PostgresModelCatalogStore(database.Configuration);
+        await store.InitializeAsync();
+        await store.InitializeAsync();
+
+        var alice = Record(AgentKind.Codex, AgentAuthMode.Subscription, "gpt-6-luna", owner: "alice", account: "acct-1");
+        await database.UpsertSessionAsync(alice);
+        // Written at every start, as the spawn does; Upsert leaves it alone.
+        await database.Sessions.SetResolvedCredentialIdAsync(alice.Id, "acct-1");
+        var at = DateTimeOffset.Parse("2026-11-07T10:00:00Z");
+        await store.PutAsync(ModelCatalogKey.ForSession(alice), Catalog("gpt-6-luna", "gpt-6.1-sol"), at);
+        // Bob has the same agent and even an account with the same id: still his own row.
+        await store.PutAsync(ModelCatalogKey.For("bob", AgentKind.Codex, AgentAuthMode.Subscription, "acct-1", null), Catalog("bob-only"), at);
+
+        var read = await store.GetAsync(ModelCatalogKey.For("alice", AgentKind.Codex, AgentAuthMode.Subscription, "acct-1", null));
+        Assert.Equal(["gpt-6-luna", "gpt-6.1-sol"], read!.Catalog.Models.Select(m => m.Id));
+        Assert.Equal(at, read.FetchedAt);
+        Assert.Null(await store.GetAsync(ModelCatalogKey.For("carol", AgentKind.Codex, AgentAuthMode.Subscription, "acct-1", null)));
+        await store.PutAsync(ModelCatalogKey.ForSession(alice), Catalog("gpt-6-astra"), at.AddHours(1));
+        Assert.Equal("gpt-6-astra", Assert.Single((await store.GetAsync(ModelCatalogKey.ForSession(alice)))!.Catalog.Models).Id);
+
+        // Bob as a viewer of Alice's session through the real share store and access rules.
+        await database.AddUserAsync("bob");
+        await database.Shares.UpsertDirectAsync("alice", alice.Id, "bob", ShareRole.Viewer);
+        var access = new SessionAccessService(database.Shares, new FakeEnterpriseLicense(true));
+        var probes = new Probes();
+        var controller = new SessionModelsController(access, database.Sessions, probes, store) { ControllerContext = UserContext("bob") };
+        var view = View(await controller.Read(alice.Id, refresh: false, default));
+        Assert.Equal("gpt-6-astra", Assert.Single(view.Catalog!.Models).Id);
+        Assert.Equal("gpt-6-luna", view.Selected);
+        Assert.False(view.SelectedListed);
+        Assert.Equal(403, Assert.IsType<ObjectResult>(await controller.Read(alice.Id, refresh: true, default)).StatusCode);
+        Assert.Equal(0, probes.Calls);
+        var body = JsonSerializer.Serialize(view, ModelCatalogSanitizer.Json);
+        Assert.DoesNotContain("acct-1", body);
+        Assert.DoesNotContain("secret", body);
+        // Carol, with no share, gets nothing; Bob's dialog never shows Alice's account.
+        var stranger = new SessionModelsController(access, database.Sessions, probes, store) { ControllerContext = UserContext("carol") };
+        Assert.IsType<NotFoundResult>(await stranger.Read(alice.Id, false, default));
+        var bobDialog = new ModelCatalogController(store, database.Sessions, probes) { ControllerContext = UserContext("bob") };
+        Assert.Equal("bob-only", Assert.Single(View(await bobDialog.Read(AgentKind.Codex, AgentAuthMode.Subscription, "acct-1", null, default)).Catalog!.Models).Id);
     }
 
     // ---------- fakes ----------
@@ -367,9 +415,12 @@ public class ModelDiscoveryTests
     {
         public IReadOnlyList<SessionRecord> Records = [];
         protected override object? Invoke(MethodInfo? method, object?[]? args) =>
-            method!.Name == nameof(ISessionStore.ListAsync)
-                ? Task.FromResult<IReadOnlyList<SessionRecord>>(Records.Where(r => r.Owner == (string)args![0]!).ToList())
-                : throw new NotSupportedException(method.Name);
+            method!.Name switch
+            {
+                nameof(ISessionStore.ListAsync) => Task.FromResult<IReadOnlyList<SessionRecord>>(Records.Where(r => r.Owner == (string)args![0]!).ToList()),
+                nameof(ISessionStore.GetByIdAsync) => Task.FromResult(Records.FirstOrDefault(r => r.Id == (string)args![0]!)),
+                _ => throw new NotSupportedException(method.Name)
+            };
     }
 
     private static ISessionStore SessionList(params SessionRecord[] records)
