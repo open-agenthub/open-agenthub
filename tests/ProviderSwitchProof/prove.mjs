@@ -89,7 +89,19 @@ try{
    const queued=await api('sessions/'+id+'/messages','POST',{body:'QUEUED-AFTER-HANDOVER-'+generation,priority:true});
    assert.equal(queued.deliveredVia,'inbox');
    terminal.close();terminal=null;
-   await until(()=>{const current=pod();return current.metadata.uid!==source.metadata.uid&&current.status.phase==='Running';},'actual replacement pod');
+   let safePointRetries=0;
+   await until(async()=>{
+    const state=await api('sessions/'+id+'/provider-switch');
+    if(state.operation?.progress.error){
+     if(state.operation.progress.phase==='requested'&&state.operation.progress.error.startsWith('Finish the current turn')&&safePointRetries++<10){
+      await sleep(1000);
+      await api('sessions/'+id+'/provider-switch/retry','POST',{requestId:selection.requestId});
+      return false;
+     }
+     throw Object.assign(new Error(state.operation.progress.error),{fatal:true});
+    }
+    try{const current=pod();return current.metadata.uid!==source.metadata.uid&&current.status.phase==='Running';}catch{return false;}
+   },'actual replacement pod');
    terminal=await openTerminal(id);
    const finished=await until(async()=>{const state=await api('sessions/'+id+'/provider-switch');if(state.operation?.progress.error)throw Object.assign(new Error(state.operation.progress.error),{fatal:true});return state.operation?.progress.phase==='completed'&&state;},'complete durable replacement');
    const cutoff=finished.completedUsage?.find(item=>item.generation===generation-1);

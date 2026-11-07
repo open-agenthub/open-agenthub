@@ -2363,8 +2363,17 @@ function createCommonServer(options = {}) {
       if (!providerSourceRequest) {
         if (runtimeDraining || modelSwitching || providerShells.size || !agentReady || exited || restartReason !== null || persisting || activityWaitingFor ||
             hubQuestionOpen || contextClear?.pending || modQueue.length || deferredMessages.length ||
-            !nextTurn || !await nextTurn.canQuiesce(term, () => scrollback, lastSize))
+            !nextTurn || !await nextTurn.canQuiesce(term, () => scrollback, lastSize)) {
+          // Record guard state, never draft text or native screen contents, for held operations.
+          console.log('[agent] Provider source safe point held: ' + JSON.stringify({
+            draining: runtimeDraining, modelSwitching, shells: providerShells.size, ready: agentReady,
+            exited, restarting: restartReason !== null, persisting, waitingFor: activityWaitingFor,
+            question: hubQuestionOpen, contextClear: Boolean(contextClear?.pending),
+            modMessages: modQueue.length, deferredMessages: deferredMessages.length,
+            input: nextTurn?.inputBlocker(term, lastSize) ?? 'no_next_turn'
+          }));
           return fileError(response, 409, 'source_not_at_safe_point');
+        }
         // Rendering yields: another maintenance request may have reserved the terminal meanwhile.
         if (runtimeDraining || modelSwitching || providerShells.size || providerSourceRequest || contextClear?.pending)
           return fileError(response, 409, 'source_not_at_safe_point');
