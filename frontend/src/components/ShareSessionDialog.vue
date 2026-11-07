@@ -226,8 +226,7 @@ onUnmounted(() => { ++recipientGeneration; clearTimeout(recipientTimer) })
         : 'Viewer link: anyone holding it can watch, not type.' }}</p>
       <p v-if="oneTimeUrl" class="one-time" data-one-time-link>Copy this one-time <strong :class="['role-badge', createdLinkRole.toLowerCase()]" data-one-time-link-role>{{ createdLinkRole }}</strong> link now; it cannot be shown again.<button class="copy" @click="copyLink">Copy</button><code>{{ oneTimeUrl }}</code></p>
       <div v-for="link in links" :key="link.id" class="person link-edit">
-        <span class="pname mono">{{ link.id }}</span>
-        <span :class="['role-badge', String(link.role).toLowerCase()]" :data-link-role-badge="link.id">{{ link.role === 'Collaborator' ? 'Collaborator · can type' : 'Viewer · read only' }}</span>
+        <span class="pname mono link-head">{{ link.id }} <span :class="['role-badge', String(link.role).toLowerCase()]" :data-link-role-badge="link.id">{{ link.role === 'Collaborator' ? 'Collaborator · can type' : 'Viewer · read only' }}</span></span>
         <select v-model="linkDrafts[link.id].role" class="fit" :aria-label="`Change role of link ${link.id}`" :data-link-role="link.id"><option>Viewer</option><option>Collaborator</option></select>
         <input v-model="linkDrafts[link.id].expiresAt" class="fit exp" :data-link-expiration="link.id" type="datetime-local" />
         <button :data-save-link="link.id" @click="saveLink(link)">Save</button>
@@ -296,6 +295,8 @@ section.bordered { border-top: 1px solid var(--border); margin-top: 14px; paddin
 .link-role-label { font-size: 12px; color: var(--muted-2); }
 .warn { color: var(--danger); }
 .role-badge { display: inline-block; border: 1px solid var(--border-2); border-radius: 999px; padding: 1px 8px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.person.link-edit { flex-wrap: wrap; }
+.link-head { flex-basis: 100%; }
 .role-badge.collaborator { border-color: var(--danger); color: var(--danger); }
 .servers { font: 12px var(--mono); color: var(--muted-2); }
 .git-in-use { font-size: 13px; margin: 8px 0 0; }
