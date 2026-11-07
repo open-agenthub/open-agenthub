@@ -94,3 +94,13 @@ The archive is restored into fresh home contents under the same path and managed
 Resume must select the checkpoint's active ID, not the original registry ID. The new owner
 request must include the post-clear task and omit the earlier cleared task. The local hub
 policy/model callbacks are fixtures; this does not establish backend replica recovery.
+
+## Ordinary session new-thread compatibility
+
+Use the managed Codex archive command above with
+`PROOF_ORDINARY_NEW_RESUME=1` instead of `PROOF_CONTEXT_CLEAR_BEFORE_RESUME=1`.
+The real terminal starts without any provider-switch request, runs an initial turn, sends
+`/new` and a second turn, then stops and restores its actual archive. Resume has no strict
+replacement flag. Its new owner turn must use the second native ID and context, while the
+production transcript retains both visible turns. This compatibility control passed locally;
+it is not a backend generation-switch or whole-browser acceptance result.
