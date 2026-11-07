@@ -90,6 +90,14 @@ Assert-NotContains $oidc 'Auth__InsecureDevMode'
 # insecureDevMode is ignored under OIDC, as the backend ignores it.
 Assert-NotContains (Render @('--set-string', 'oidc.authority=https://sso.example.com/realms/agenthub', '--set', 'auth.insecureDevMode=true')) 'Auth__InsecureDevMode'
 
+# #492: under OIDC the backend is still told which name the API key acted as, so it can keep that
+# name from inheriting admin rights and point admins at its data. Without lookup (helm template)
+# only an explicit auth.apiKey.owner is known; the ConfigMap/Secret chain needs a real API server.
+Assert-NotContains $oidc 'Auth__FormerApiKeyOwner'
+Assert-Contains (Render @('--set-string', 'oidc.authority=https://sso.example.com/realms/agenthub',
+    '--set-string', 'auth.apiKey.owner=keyholder')) 'Auth__FormerApiKeyOwner: "keyholder"'
+Assert-NotContains (Render) 'Auth__FormerApiKeyOwner'
+
 # --- Explicit insecure development mode: no key, the flag reaches the backend. ---
 $insecure = Render @('--set', 'auth.insecureDevMode=true')
 if (Get-Document $insecure 'Secret' 'agenthub-api-key') { throw 'Insecure mode must not generate a key.' }

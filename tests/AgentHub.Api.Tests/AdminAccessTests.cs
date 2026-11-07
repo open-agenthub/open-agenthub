@@ -52,6 +52,64 @@ public class AdminAccessTests
         private sealed class NoLock : IAsyncDisposable { public ValueTask DisposeAsync() => ValueTask.CompletedTask; }
     }
 
+    internal sealed class InMemorySingleUserOwnerStore(params string[] owners) : ISingleUserOwnerStore
+    {
+        public HashSet<string> Owners { get; } = new(owners, StringComparer.OrdinalIgnoreCase);
+        public Task RecordAsync(string owner, string mode, CancellationToken ct = default)
+        { Owners.Add(owner); return Task.CompletedTask; }
+        public Task<IReadOnlyCollection<string>> ListOwnersAsync(CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyCollection<string>>(Owners.ToList());
+        public Task<IReadOnlyList<SingleUserOwnerData>> ListWithDataAsync(CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<SingleUserOwnerData>>([]);
+    }
+
+    private static AdminAccess BuildOidc(string? admins, IUserRoleStore? roles, ISingleUserOwnerStore owners,
+        params IAdminRoleProvider[] providers)
+    {
+        var cfg = new ConfigurationBuilder()
+            .AddInMemoryCollection(new[] { new KeyValuePair<string, string?>("Ee:Admins", admins) })
+            .Build();
+        return new AdminAccess(cfg, NullLogger<AdminAccess>.Instance, providers, roles, singleUserOwners: owners);
+    }
+
+    [Fact]
+    public async Task ApiKeyOwnerName_DoesNotBecomeAdmin_ThroughARoleOrGroup_UnderOidc()
+    {
+        // The identity-provider user who signs in as "admin" after a switch from the API key must
+        // not inherit admin rights from a role row or an admin group (#492).
+        var roles = new InMemoryUserRoleStore();
+        await roles.SetRoleAsync("admin", "admin");
+        var groups = new FakeRoleProvider { HasMappings = true };
+        groups.Admins.Add("admin");
+        groups.Admins.Add("dora");
+        var a = BuildOidc("", roles, new InMemorySingleUserOwnerStore("admin", "dev"), groups);
+
+        var resolved = await a.ResolveAsync("admin");
+        Assert.False(resolved.IsAdmin);
+        Assert.Equal(RoleSources.SingleUserOwner, resolved.Source);
+        Assert.False(await a.IsAdminAsync("ADMIN"));
+        Assert.False(await a.IsAdminAsync("dev"));
+        Assert.True(await a.IsAdminAsync("dora"));       // groups still work for everyone else
+    }
+
+    [Fact]
+    public async Task ApiKeyOwnerName_RoleRowAlone_DoesNotCountAsADesignatedAdmin()
+    {
+        var roles = new InMemoryUserRoleStore();
+        await roles.SetRoleAsync("keyholder", "admin");
+        var a = BuildOidc("", roles, new InMemorySingleUserOwnerStore("keyholder"));
+        Assert.False(await a.IsAdminDesignatedAsync());
+        Assert.False(await a.KeepsAnAdminAsync(["keyholder"]));
+    }
+
+    [Fact]
+    public async Task ApiKeyOwnerName_IsAdmin_OnlyWhenListedInEeAdmins()
+    {
+        var a = BuildOidc("admin", new InMemoryUserRoleStore(), new InMemorySingleUserOwnerStore("admin"));
+        Assert.Equal(RoleSources.Values, (await a.ResolveAsync("admin")).Source);
+        Assert.False(await a.IsSingleUserOwnerAsync("admin"));
+    }
+
     private static AdminAccess Build(string? admins, params IAdminRoleProvider[] providers)
         => Build(admins, null, providers);
 
@@ -64,21 +122,33 @@ public class AdminAccessTests
     }
 
     [Fact]
-    public async Task EmptyList_IsBootstrap_EveryoneIsAdmin()
+    public async Task NoDesignation_NobodyIsAdmin()
     {
-        var a = Build("");
-        Assert.True(a.Bootstrap);
-        Assert.True(await a.IsAdminAsync("anyone"));
-        Assert.Equal(RoleSources.Bootstrap, (await a.ResolveAsync("anyone")).Source);
+        // #492: an OIDC user who signs in to an instance with no designated admin is a regular
+        // user. Before, every such user was an admin until someone was designated.
+        var roles = new InMemoryUserRoleStore();
+        var a = Build("", roles, new FakeRoleProvider { HasMappings = false });
+        Assert.False(await a.IsAdminDesignatedAsync());
+        Assert.False(await a.IsAdminAsync("first-user"));
+        Assert.False(await a.IsAdminAsync("second-user"));
+        Assert.Equal(new RoleResolution("user", RoleSources.Default, []), await a.ResolveAsync("first-user"), new ResolutionComparer());
         Assert.False(await a.IsAdminAsync(null));
         Assert.False(await a.IsAdminAsync(""));
+    }
+
+    [Fact]
+    public async Task ConfiguredAdmin_IsAdmin_AndDesignatesOne()
+    {
+        var a = Build("alice");
+        Assert.True(await a.IsAdminDesignatedAsync());
+        Assert.True(await a.IsAdminAsync("alice"));
+        Assert.False(await a.IsAdminAsync("bob"));
     }
 
     [Fact]
     public async Task ConfiguredList_OnlyListedAreAdmins()
     {
         var a = Build("alice, bob;carol");
-        Assert.False(a.Bootstrap);
         Assert.True(await a.IsAdminAsync("alice"));
         Assert.True(await a.IsAdminAsync("bob"));
         Assert.True(await a.IsAdminAsync("carol"));
@@ -107,48 +177,32 @@ public class AdminAccessTests
     }
 
     [Fact]
-    public async Task Bootstrap_IsDisabled_WhenARoleProviderHasAdminMappings()
+    public async Task AdminGroupMapping_StillGrantsAdmin_WithoutValuesAdmins()
     {
         var provider = new FakeRoleProvider { HasMappings = true };
         provider.Admins.Add("dora");
+        provider.Users.Add("frank");
         var a = Build("", provider);
-        Assert.True(a.Bootstrap); // config-derived flag stays, but…
-        Assert.True(await a.IsAdminAsync("dora"));
-        Assert.False(await a.IsAdminAsync("anyone")); // …everyone-is-admin no longer applies
+        Assert.True(await a.IsAdminDesignatedAsync());
+        Assert.Equal(new RoleResolution("admin", RoleSources.Group, ["leads"]), await a.ResolveAsync("dora"), new ResolutionComparer());
+        Assert.Equal(new RoleResolution("user", RoleSources.Group, ["staff"]), await a.ResolveAsync("frank"), new ResolutionComparer());
+        Assert.False(await a.IsAdminAsync("anyone"));
     }
 
     [Fact]
-    public async Task Bootstrap_StaysActive_WhileProviderHasNoMappings()
+    public async Task ExplicitAdminRole_IsKept_AndDesignatesOne()
     {
-        var provider = new FakeRoleProvider { HasMappings = false };
-        var a = Build("", provider);
-        Assert.True(await a.IsAdminAsync("anyone"));
-    }
-
-    [Fact]
-    public async Task ExplicitAdmin_EndsBootstrap()
-    {
+        // An existing install whose admin was made one in the admin area keeps that admin.
         var roles = new InMemoryUserRoleStore();
         var a = Build("", roles);
-        Assert.True(await a.IsAdminAsync("bob"));
+        Assert.False(await a.IsAdminDesignatedAsync());
 
         await roles.SetRoleAsync("alice", "admin");
 
-        Assert.False(await a.IsBootstrapActiveAsync());
+        Assert.True(await a.IsAdminDesignatedAsync());
         Assert.Equal(RoleSources.User, (await a.ResolveAsync("alice")).Source);
+        Assert.True(await a.IsAdminAsync("alice"));
         Assert.False(await a.IsAdminAsync("bob"));
-    }
-
-    [Fact]
-    public async Task ExplicitUser_DoesNotEndBootstrap_ButAppliesToThatUser()
-    {
-        var roles = new InMemoryUserRoleStore();
-        await roles.SetRoleAsync("bob", "user");
-        var a = Build("", roles);
-
-        Assert.True(await a.IsBootstrapActiveAsync());
-        Assert.False(await a.IsAdminAsync("bob"));
-        Assert.True(await a.IsAdminAsync("carol"));
     }
 
     [Fact]
@@ -195,8 +249,6 @@ public class AdminAccessTests
     {
         var provider = new FakeRoleProvider { HasMappings = false };
         provider.Users.Add("frank");
-        // Bootstrap still makes frank an admin: a user mapping is a label, not a restriction.
-        Assert.Equal(RoleSources.Bootstrap, (await Build("", provider).ResolveAsync("frank")).Source);
 
         var resolved = await Build("alice", provider).ResolveAsync("frank");
         Assert.Equal("user", resolved.Role);
@@ -207,31 +259,15 @@ public class AdminAccessTests
     [Fact]
     public async Task KeepsAnAdmin_CountsValuesAdminsAndKnownUsers()
     {
-        Assert.True(await Build("alice").KeepsAnAdminAsync(bootstrapBefore: false, []));
+        Assert.True(await Build("alice").KeepsAnAdminAsync([]));
 
         var roles = new InMemoryUserRoleStore();
         var a = Build("", roles);
-        Assert.True(await a.KeepsAnAdminAsync(true, ["bob"]));       // bootstrap
-        await roles.SetRoleAsync("bob", "user");
-        Assert.False(await a.KeepsAnAdminAsync(true, ["bob"]));      // the only known user is demoted
-        Assert.True(await a.KeepsAnAdminAsync(true, ["bob", "carol"]));
+        Assert.False(await a.KeepsAnAdminAsync(["bob"]));            // nobody is designated
         await roles.SetRoleAsync("carol", "admin");
-        Assert.True(await a.KeepsAnAdminAsync(true, ["bob", "carol"]));
-    }
-
-    [Fact]
-    public async Task KeepsAnAdmin_IsFalse_WhenTheChangeReopensBootstrap()
-    {
-        var roles = new InMemoryUserRoleStore();
-        await roles.SetRoleAsync("carol", "admin");
-        var a = Build("", roles);
-        Assert.False(await a.IsBootstrapActiveAsync());
-
-        await roles.SetRoleAsync("carol", null);
-
-        // Everyone would resolve to admin again — exactly what demoting the last admin must not do.
-        Assert.True(await a.IsAdminAsync("carol"));
-        Assert.False(await a.KeepsAnAdminAsync(bootstrapBefore: false, ["carol", "dave"]));
+        Assert.True(await a.KeepsAnAdminAsync(["bob", "carol"]));
+        await roles.SetRoleAsync("carol", null);                     // demoting the last admin
+        Assert.False(await a.KeepsAnAdminAsync(["bob", "carol"]));
     }
 
     private sealed class ResolutionComparer : IEqualityComparer<RoleResolution>

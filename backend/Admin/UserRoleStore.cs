@@ -23,7 +23,7 @@ public interface IUserRoleStore
     /// <summary>Sets the owner's role, or clears it with null; returns the previous role.</summary>
     Task<string?> SetRoleAsync(string owner, string? role, CancellationToken ct = default);
 
-    /// <summary>True when at least one user is explicitly an admin (ends bootstrap mode).</summary>
+    /// <summary>True when at least one user is explicitly an admin (an admin is designated).</summary>
     Task<bool> AnyAdminAsync(CancellationToken ct = default);
 
     Task AuditAsync(string actor, string subjectKind, string subject, string? oldRole, string? newRole,

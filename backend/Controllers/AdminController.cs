@@ -22,10 +22,16 @@ public sealed class AdminController : ControllerBase
     private readonly LicenseStore _store;
     private readonly UserDirectory _dir;
     private readonly IConfiguration _cfg;
+    private readonly AgentHub.Api.Auth.HubAuthOptions? _hubAuth;
+    private readonly ISingleUserOwnerStore? _singleUserOwners;
 
     public AdminController(AdminAccess access, IEnterpriseLicense license, LicenseStore store,
-        UserDirectory dir, IConfiguration cfg)
-    { _access = access; _license = license; _store = store; _dir = dir; _cfg = cfg; }
+        UserDirectory dir, IConfiguration cfg, AgentHub.Api.Auth.HubAuthOptions? hubAuth = null,
+        ISingleUserOwnerStore? singleUserOwners = null)
+    {
+        _access = access; _license = license; _store = store; _dir = dir; _cfg = cfg;
+        _hubAuth = hubAuth; _singleUserOwners = singleUserOwners;
+    }
 
     private string Owner =>
         User.FindFirstValue("preferred_username") ?? User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "dev";
@@ -35,34 +41,49 @@ public sealed class AdminController : ControllerBase
     [HttpGet("access")]
     // The user name lets the API-key login show who the key acts as; nothing else tells the
     // browser, since a static key carries no profile the way an OIDC token does.
-    public async Task<object> Access(CancellationToken ct) => new { isAdmin = await IsAdminAsync(ct), user = Owner };
+    // adminDesignated is answered to every signed-in user, not only admins: while it is false
+    // nobody is an admin, so the only people who can see the notice are the ones who are not.
+    public async Task<object> Access(CancellationToken ct)
+    {
+        var isAdmin = await IsAdminAsync(ct);
+        return new
+        {
+            isAdmin,
+            user = Owner,
+            adminDesignated = await _access.IsAdminDesignatedAsync(ct),
+            // Admins only, and only under OIDC: in API-key mode the key owner is the one user, and
+            // the counts say nothing a non-admin needs.
+            singleUserOwnerData = isAdmin && _hubAuth?.Mode == AgentHub.Api.Auth.HubAuthMode.Oidc && _singleUserOwners is not null
+                ? await _singleUserOwners.ListWithDataAsync(ct)
+                : []
+        };
+    }
 
     public sealed record SeatInfo(int Used, int Included);
     public sealed record Overview(
         bool IsAdmin, LicenseStatus License, SeatInfo Seats,
         IReadOnlyList<AdminUser> Users, string? BillingPortalUrl, DateTime? LastCheckIn,
-        DateTime? CancelAt);
+        DateTime? CancelAt, DateTime? FeaturesStopAt = null, string? LastReportError = null,
+        DateTime? LastReportErrorAt = null, int ReportWarningDays = 7, bool ReportWarning = false);
 
     [HttpGet("overview")]
     public async Task<IActionResult> GetOverview(CancellationToken ct)
     {
         if (!await IsAdminAsync(ct)) return Forbid();
+        // Reports and activation can land on another replica. Re-read before displaying the
+        // signed expiry so the warning reflects the token shared by all replicas.
+        await _license.ReloadAsync(ct);
         var status = _license.Status;
-        // Claims are cached per process: right after an activation handled by another
-        // replica this one would still say "unlicensed". Before claiming that on the
-        // admin page, re-read the store once (cheap, admin-only traffic).
-        if (!status.Valid)
-        {
-            await _license.ReloadAsync(ct);
-            status = _license.Status;
-        }
         var used = await _dir.CountLicensedAsync(ct);
         var users = await _dir.ListAsync(ct);
         var lastCheckIn = await _store.GetLastReportAsync(ct);
         var cancelAt = await _store.GetCancelAtAsync(ct);
+        var reportError = await _store.GetReportErrorAsync(ct);
+        var warningDays = Math.Clamp(_cfg.GetValue("Ee:License:ReportWarningDays", 7), 0, 365);
         return Ok(new Overview(
             true, status, new SeatInfo(used, status.Seats), users, _cfg["Ee:BillingPortalUrl"], lastCheckIn,
-            cancelAt));
+            cancelAt, status.ValidUntil, reportError.Error, reportError.At, warningDays,
+            status.ValidUntil is { } stop && stop <= DateTime.UtcNow.AddDays(warningDays)));
     }
 
     public sealed record CheckoutReq(string Email, string Org, int Seats, string? ReturnUrl);

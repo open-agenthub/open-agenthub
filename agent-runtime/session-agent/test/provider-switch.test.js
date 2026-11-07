@@ -44,7 +44,9 @@ test('target holds user input until native evidence and archive checkpoint, but 
   await requestHttp(h, 'POST', '/agenthub/turn', headers, JSON.stringify({ event: 'prompt' }), '127.0.0.1');
   clock = 14_000;
   await requestHttp(h, 'POST', '/agenthub/turn', headers, JSON.stringify({ event: 'stop' }), '127.0.0.1');
-  assert.equal((await route(h, 'prepare', nextId)).status, 200);
+  const competing = await Promise.all([route(h, 'prepare', nextId),
+    route(h, 'prepare', '33333333-3333-4333-8333-333333333333')]);
+  assert.deepEqual(competing.map(result => result.status).sort(), [200, 409]);
   const reserved = h.terminals[0].writes.length;
   // An old release retry must not reopen the terminal reserved by a later switch.
   assert.equal((await route(h, 'release')).status, 200);

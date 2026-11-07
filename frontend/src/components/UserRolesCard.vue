@@ -35,7 +35,7 @@ function sourceText(u) {
     case 'values': return 'Ee:Admins in the Helm values — cannot be changed here'
     case 'user': return 'set here'
     case 'group': return `group ${u.groups.join(', ')}`
-    case 'bootstrap': return 'no admin designated yet — everyone is an admin'
+    case 'single-user-owner': return 'owner name from API-key mode — admin only through Ee:Admins'
     default: return 'default'
   }
 }
@@ -50,16 +50,11 @@ const roleText = (r) => r || 'cleared'
   <section class="card" data-user-roles>
     <div class="card-head">
       <h4>Admins &amp; roles</h4>
-      <span v-if="data?.bootstrap" class="badge warn" data-roles-bootstrap>bootstrap</span>
     </div>
     <p class="note">
       Precedence: <b>Ee:Admins</b> (Helm values, a break-glass admin) → a role <b>set here</b> →
       <b>group</b> mappings<template v-if="!data?.groupMapping"> (Enterprise)</template> → default user.
       A change applies at the user's next request.
-    </p>
-    <p v-if="data?.bootstrap" class="warn-text">
-      No admin is designated, so every signed-in user is an admin. Making someone an admin here
-      ends that for everyone else.
     </p>
     <p v-if="error" class="err" data-roles-error>{{ error }}</p>
     <p v-if="!data && !error" class="muted">Loading…</p>
@@ -99,7 +94,6 @@ const roleText = (r) => r || 'cleared'
 .badge.ok { color: var(--ok); border-color: var(--ok); }
 .badge.warn { color: #d9a13c; border-color: #d9a13c; }
 .note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0 0 10px; }
-.warn-text { color: #d9a13c; font-size: 12px; margin: 0 0 10px; }
 .rows { display: flex; flex-direction: column; gap: 8px; }
 .rrow { display: flex; align-items: center; gap: 12px; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
 .rinfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }

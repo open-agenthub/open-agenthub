@@ -123,7 +123,11 @@ data:
   Oidc__Scope: {{ .Values.oidc.scope | quote }}
   Oidc__RequireHttpsMetadata: {{ .Values.oidc.requireHttpsMetadata | quote }}
   {{- $authMode := include "agenthub.authMode" . }}
-  {{- if eq $authMode "apiKey" }}
+  {{- if eq $authMode "oidc" }}
+  {{- with include "agenthub.formerApiKeyOwner" . }}
+  Auth__FormerApiKeyOwner: {{ . | quote }}
+  {{- end }}
+  {{- else if eq $authMode "apiKey" }}
   Auth__ApiKeyOwner: {{ include "agenthub.apiKeyOwner" . | quote }}
   {{- else if eq $authMode "insecureDev" }}
   Auth__InsecureDevMode: "true"
@@ -137,6 +141,7 @@ data:
   Ee__Admins: {{ .Values.ee.admins | default "" | quote }}
   Ee__BillingPortalUrl: {{ .Values.ee.billingPortalUrl | default "" | quote }}
   Ee__License__ServiceUrl: {{ .Values.ee.license.serviceUrl | default "" | quote }}
+  Ee__License__ReportWarningDays: {{ dig "reportWarningDays" 7 .Values.ee.license | int | quote }}
   Ee__License__ReportIntervalHours: {{ .Values.ee.license.reportIntervalHours | default 24 | quote }}
   Ee__Slack__Enabled: {{ .Values.ee.slack.enabled | quote }}
   Ee__Slack__Channel: {{ .Values.ee.slack.channel | quote }}

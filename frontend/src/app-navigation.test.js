@@ -210,6 +210,47 @@ describe('license gate wiring', () => {
   })
 })
 
+describe('admin designation notice', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.spyOn(globalThis, 'setInterval').mockReturnValue(1)
+    mocks.api.listSessions.mockResolvedValue(sessions)
+    mocks.api.listProjects.mockResolvedValue([])
+    history.replaceState({}, '', '/')
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('tells a signed-in user how to designate an admin while none is', async () => {
+    mocks.api.adminAccess.mockResolvedValue({ isAdmin: false, user: 'alice', adminDesignated: false })
+    const wrapper = mount(App, { global: { stubs } })
+    await flushPromises()
+    const notice = wrapper.get('[data-no-admin-banner]')
+    expect(notice.text()).toContain('No administrator is designated')
+    expect(notice.text()).toContain('ee.admins: "alice"')
+  })
+
+  it('tells an admin which API-key owner name still holds data', async () => {
+    mocks.api.adminAccess.mockResolvedValue({ isAdmin: true, user: 'alice', adminDesignated: true,
+      singleUserOwnerData: [{ owner: 'admin', sessions: 3, projects: 1 }] })
+    const wrapper = mount(App, { global: { stubs } })
+    await flushPromises()
+    const notice = wrapper.get('[data-single-user-owner-banner]')
+    expect(notice.text()).toContain('Data from API-key mode is under the name admin (3 session(s), 1 project(s))')
+    expect(notice.text()).toContain('identity-provider user with the same username')
+  })
+
+  it('stays hidden once an admin is designated, and for a backend that does not report it', async () => {
+    for (const access of [{ isAdmin: false, user: 'bob', adminDesignated: true }, { isAdmin: false }]) {
+      mocks.api.adminAccess.mockResolvedValue(access)
+      const wrapper = mount(App, { global: { stubs } })
+      await flushPromises()
+      expect(wrapper.find('[data-no-admin-banner]').exists()).toBe(false)
+      expect(wrapper.find('[data-single-user-owner-banner]').exists()).toBe(false)
+      wrapper.unmount()
+    }
+  })
+})
+
 describe('sidebar footer', () => {
   beforeEach(() => {
     vi.clearAllMocks()

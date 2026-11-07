@@ -16,9 +16,13 @@ image:
   # names are agent-runtime-claude, agent-runtime-codex, agent-runtime-cursor,
   # agent-runtime-openclaw, and agent-runtime-opencode unless overridden below.
   registry: ghcr.io/open-agenthub/open-agenthub
+  # Empty = the chart's appVersion, so a chart version installs exactly that release and an
+  # upgrade moves every component with it. Set a tag only to deviate on purpose; a moving one
+  # such as "latest" also needs pullPolicy/agent.pullPolicy "Always", or nodes keep whatever
+  # they pulled first.
   # Quote a commit-SHA tag (tag: "4317158e6") or pass it with --set-string: YAML reads an
   # unquoted SHA made of digits and one "e" as a number, and the image becomes "4.317158e+06".
-  tag: latest
+  tag: ""
   pullPolicy: IfNotPresent
   # Name of an existing dockerconfigjson secret (empty = none). Must exist in the release
   # namespace AND in the sessionsNamespace (agent pods use it to pull the agent-runtime image).
@@ -290,6 +294,8 @@ oidc:
   audience: agenthub
   clientId: agenthub
   scope: openid profile email
+  # Backend startup fetches discovery and signing keys; only isolated HTTP tests should
+  # disable HTTPS metadata. Browser access and TLS trust must work independently.
   requireHttpsMetadata: true
 
 # Login for installs without OIDC (oidc.authority empty), docs/no-oidc-api-key.md. The backend
@@ -303,6 +309,9 @@ auth:
     existingSecretKey: api-key
     # The owner the key acts as; always an admin. Empty = "admin" on a new install, and "dev" on
     # an upgrade of an install from before the key existed, so its sessions stay visible.
+    # Its data stays under this name after a switch to OIDC, where it belongs to the identity-
+    # provider user with the same username. If you may switch later, pick a name nobody can
+    # register there. See docs/admin-bootstrap.md.
     owner: ""
   # No login at all: every request is admin user "dev". Local development only — anyone who
   # can reach the backend controls every session. Ignored when oidc.authority is set.
@@ -409,8 +418,9 @@ telemetry:
 ee:
   # Comma-separated list of admin usernames (preferred_username): break-glass admins that
   # the admin area cannot demote. Everyone else can be made an admin or a regular user in
-  # Admin → Users & seats without a redeploy. Empty and nobody designated there (or via an
-  # admin group) = every signed-in user is an admin (bootstrap). See docs/admin-roles.md.
+  # Admin → Users & seats without a redeploy. With OIDC, set at least one here: nobody is an
+  # admin by default, and until someone is designated the admin area is closed to everyone.
+  # The API-key owner is always an admin. See docs/admin-bootstrap.md.
   admins: ""
   # Optional link to the billing portal (customer portal via the license service),
   # surfaced in the Admin area for subscription/invoice management.
@@ -423,6 +433,8 @@ ee:
   license:
     serviceUrl: "https://license.instances.open-agenthub.on-mb.com"
     reportIntervalHours: 24
+    # Warn admins this many days before the signed token expires without renewal (0–365).
+    reportWarningDays: 7
   # Slack integration: asks you in a Slack thread whenever a session waits for input,
   # and turns your thread replies into the agent's answer. Uses Socket Mode.
   slack:

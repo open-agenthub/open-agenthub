@@ -164,7 +164,7 @@ public sealed class UserGroupStore
         return await cmd.ExecuteScalarAsync(ct) is true;
     }
 
-    /// <summary>True when at least one group is mapped to the admin role (disables bootstrap mode).</summary>
+    /// <summary>True when at least one group is mapped to the admin role (designates an admin).</summary>
     public async Task<bool> AnyAdminGroupAsync(CancellationToken ct = default)
     {
         await using var cmd = _db.CreateCommand("SELECT EXISTS (SELECT 1 FROM group_roles WHERE role = 'admin')");

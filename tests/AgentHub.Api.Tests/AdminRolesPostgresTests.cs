@@ -91,22 +91,24 @@ public class AdminRolesPostgresTests
     }
 
     [PostgreSqlFact]
-    public async Task SetRole_PromotesAKnownUser_EndsBootstrap_AndIsAudited()
+    public async Task SetRole_PromotesAKnownUser_AndIsAudited()
     {
         await using var db = await AdminRolesDatabase.CreateAsync();
-        await db.SignInAsync("alice", "bob");
-        var access = db.Access("");
-        var controller = db.RolesController(access, "alice");
+        await db.SignInAsync("root", "alice", "bob");
+        var access = db.Access("root");
 
-        var result = await controller.SetRole("bob", new("admin"), default);
+        // Without a designation alice cannot reach the endpoint at all (#492).
+        Assert.IsType<ForbidResult>(await db.RolesController(access, "alice").SetRole("bob", new("admin"), default));
+
+        var result = await db.RolesController(access, "root").SetRole("bob", new("admin"), default);
 
         var body = Assert.IsType<AdminRolesController.RolesOverview>(Assert.IsType<OkObjectResult>(result).Value);
-        Assert.False(body.Bootstrap);
         Assert.Equal(("admin", RoleSources.User), Row(body, "bob"));
         Assert.Equal(("user", RoleSources.Default), Row(body, "alice"));
-        Assert.False(await access.IsAdminAsync("alice")); // takes effect on the next request
+        Assert.True(await access.IsAdminAsync("bob")); // takes effect on the next request
+        Assert.False(await access.IsAdminAsync("alice"));
         var entry = Assert.Single(await db.Roles.ListAuditAsync(10));
-        Assert.Equal(("alice", "user", "bob", "admin"), (entry.Actor, entry.SubjectKind, entry.Subject, entry.NewRole));
+        Assert.Equal(("root", "user", "bob", "admin"), (entry.Actor, entry.SubjectKind, entry.Subject, entry.NewRole));
         Assert.Null(entry.OldRole);
     }
 
@@ -128,6 +130,49 @@ public class AdminRolesPostgresTests
         await db.Roles.SetRoleAsync("bob", "admin");
         Assert.IsType<OkObjectResult>(await db.RolesController(access, "alice").SetRole("alice", new("user"), default));
         Assert.False(await access.IsAdminAsync("alice"));
+    }
+
+    [PostgreSqlFact]
+    public async Task SingleUserOwners_AreRecorded_AndReportedOnlyWithData()
+    {
+        await using var db = await AdminRolesDatabase.CreateAsync();
+        await db.SingleUserOwners.RecordAsync("keyholder", "apiKey");
+        await db.SingleUserOwners.RecordAsync("KeyHolder", "apiKey"); // once per name, case-insensitive
+
+        var owners = await db.SingleUserOwners.ListOwnersAsync();
+        Assert.Equal(["admin", "dev", "keyholder"], owners.Select(o => o.ToLowerInvariant()).Order());
+        // Neither table exists yet in this schema: nothing to report, and no error.
+        Assert.Empty(await db.SingleUserOwners.ListWithDataAsync());
+
+        await db.ExecuteAsync("""
+            CREATE TABLE sessions (id TEXT, owner TEXT);
+            CREATE TABLE projects (id TEXT, owner TEXT);
+            INSERT INTO sessions VALUES ('s1', 'keyholder'), ('s2', 'KEYHOLDER'), ('s3', 'alice');
+            INSERT INTO projects VALUES ('p1', 'admin');
+            """);
+        var data = await db.SingleUserOwners.ListWithDataAsync();
+        Assert.Equal([("admin", 0L, 1L), ("keyholder", 2L, 0L)],
+            data.Select(d => (d.Owner.ToLowerInvariant(), d.Sessions, d.Projects)));
+    }
+
+    [PostgreSqlFact]
+    public async Task SetRole_RefusesToPromoteTheApiKeyOwnerName()
+    {
+        await using var db = await AdminRolesDatabase.CreateAsync();
+        await db.SignInAsync("root", "admin", "keyholder");
+        await db.SingleUserOwners.RecordAsync("keyholder", "apiKey");
+        var access = db.Access("root");
+
+        foreach (var name in new[] { "admin", "keyholder" })
+        {
+            var refused = await db.RolesController(access, "root").SetRole(name, new("admin"), default);
+            Assert.IsType<ConflictObjectResult>(refused);
+            Assert.Null(await db.Roles.GetRoleAsync(name));
+            Assert.False(await access.IsAdminAsync(name));
+        }
+        // Labelling it a user is harmless and allowed.
+        Assert.IsType<OkObjectResult>(await db.RolesController(access, "root").SetRole("admin", new("user"), default));
+        Assert.Empty((await db.Roles.ListAuditAsync(10)).Where(e => e.NewRole == "admin"));
     }
 
     [PostgreSqlFact]
@@ -180,7 +225,7 @@ public class AdminRolesPostgresTests
         var access = db.Access("", licensed: true);
         var controller = db.GroupController(access, "alice");
 
-        // alice is the only admin, through "leads"; "ops" keeps bootstrap off.
+        // alice is the only admin, through "leads"; "ops" is mapped but has no members.
         var refused = await controller.SetGroupRole("leads", new("user"), default);
         Assert.IsType<ConflictObjectResult>(refused);
         Assert.Equal("admin", await db.Groups.GetGroupRoleAsync("leads"));
@@ -218,12 +263,24 @@ internal sealed class AdminRolesDatabase : IAsyncDisposable
         Groups = new UserGroupStore(configuration);
         Users = new UserDirectory(configuration);
         Limits = new UsageLimitStore(configuration);
+        SingleUserOwners = new SingleUserOwnerStore(configuration);
+    }
+
+    /// <summary>Runs SQL in this test's schema.</summary>
+    public async Task ExecuteAsync(string sql)
+    {
+        var builder = new NpgsqlConnectionStringBuilder(_baseConnectionString) { SearchPath = _schema };
+        await using var connection = new NpgsqlConnection(builder.ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync();
     }
 
     public UserRoleStore Roles { get; }
     public UserGroupStore Groups { get; }
     public UserDirectory Users { get; }
     public UsageLimitStore Limits { get; }
+    public SingleUserOwnerStore SingleUserOwners { get; }
 
     public static async Task<AdminRolesDatabase> CreateAsync()
     {
@@ -254,6 +311,7 @@ internal sealed class AdminRolesDatabase : IAsyncDisposable
             await db.Groups.InitializeAsync();
             await db.Users.InitializeAsync();
             await db.Limits.InitializeAsync();
+            await db.SingleUserOwners.InitializeAsync();
             return db;
         }
         catch
@@ -274,7 +332,8 @@ internal sealed class AdminRolesDatabase : IAsyncDisposable
             .AddInMemoryCollection(new[] { new KeyValuePair<string, string?>("Ee:Admins", admins) })
             .Build();
         return new AdminAccess(cfg, NullLogger<AdminAccess>.Instance,
-            [new GroupRoleAdminProvider(new FakeEnterpriseLicense(licensed), Groups)], Roles);
+            [new GroupRoleAdminProvider(new FakeEnterpriseLicense(licensed), Groups)], Roles,
+            singleUserOwners: SingleUserOwners);
     }
 
     public AdminRolesController RolesController(AdminAccess access, string caller)

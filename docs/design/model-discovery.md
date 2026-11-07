@@ -86,11 +86,11 @@ Rejected alternatives:
 for every auth mode: required for a custom endpoint as before, optional otherwise (empty = the
 CLI's default). The pod gets it as `AGENTHUB_MODEL_NAME` and each runtime maps it: Claude
 `ANTHROPIC_MODEL` in the CLI child's environment, Codex a top-level `model` in `config.toml`
-(an argument would break the driver's resume-command recognition), Cursor `--model`, OpenCode
+(and `--model` on a resume, which ignores the config: `live-model-switch.md`), Cursor `--model`, OpenCode
 the user config's `model`, ahead of the image-wide `AGENTHUB_OPENCODE_MODEL`.
 OpenClaw refuses it at create, like a custom endpoint. Changing it in the edit dialog applies on
-the next restart, like every other start setting; switching mid-conversation stays the CLI's own
-`/model`, which the composer already sends.
+the next restart, like every other start setting; switching mid-conversation is the Workspace
+picker's job (#478, `live-model-switch.md`).
 
 ## Who sees what
 
@@ -117,8 +117,7 @@ the next restart, like every other start setting; switching mid-conversation sta
 - The probe shares HOME with the interactive CLI. Two processes on one login is what the CLIs
   support anyway (a person running a second `claude` in the shell does the same), but Codex's
   probe starts its app-server, which also reads the plugin and account routes once.
-- A Workspace picker that switches the running session is not part of this change: the CLI's own
-  `/model` does that today. A follow-up could offer the list there.
+- Switching the running session is #478's Workspace picker (`live-model-switch.md`).
 
 ## Verification
 

@@ -16,7 +16,7 @@ public interface IAdminRoleProvider
     /// </summary>
     Task<GroupRole?> GetGroupRoleAsync(string owner, CancellationToken ct = default);
 
-    /// <summary>True when the provider designates at least one admin (disables bootstrap mode).</summary>
+    /// <summary>True when the provider designates at least one admin.</summary>
     Task<bool> HasAdminMappingsAsync(CancellationToken ct = default);
 }
 
@@ -29,8 +29,12 @@ public static class RoleSources
     public const string User = "user";
     /// <summary>From an OIDC group mapped to a role (Enterprise Edition).</summary>
     public const string Group = "group";
-    /// <summary>No source designates any admin, so everyone is one.</summary>
-    public const string Bootstrap = "bootstrap";
+    /// <summary>
+    /// The name an install used without OIDC (API-key owner, development user). Under OIDC only
+    /// <c>Ee:Admins</c> can make it an admin: a per-user role or group would otherwise hand the
+    /// old owner's admin rights to whoever registers that username at the identity provider.
+    /// </summary>
+    public const string SingleUserOwner = "single-user-owner";
     /// <summary>Nothing applies: a regular user.</summary>
     public const string Default = "default";
 }
@@ -47,9 +51,10 @@ public sealed record RoleResolution(string Role, string Source, IReadOnlyList<st
 /// <item><c>Ee:Admins</c> (comma/space/semicolon separated owner usernames) — always admin.</item>
 /// <item>A role set for the user in the admin area (<see cref="IUserRoleStore"/>).</item>
 /// <item>An admin group mapping from an <see cref="IAdminRoleProvider"/> (EE).</item>
-/// <item>Bootstrap: while no source designates any admin, every signed-in user is one.</item>
 /// <item>Otherwise a regular user ("user" group mappings only label this).</item>
 /// </list>
+/// Nobody is an admin by default. While no source designates one, the admin area is closed to
+/// everyone and the app says so (<see cref="IsAdminDesignatedAsync"/>).
 /// Nothing is cached: a role changed in the UI applies at the user's next request, on every
 /// replica, which is what the change replaces a redeploy for. See docs/admin-roles.md.
 /// </summary>
@@ -58,45 +63,62 @@ public sealed class AdminAccess
     private readonly HashSet<string> _admins;
     private readonly IEnumerable<IAdminRoleProvider> _roleProviders;
     private readonly IUserRoleStore? _userRoles;
-
-    /// <summary>True when no admins are configured via <c>Ee:Admins</c>. Explicit user roles and
-    /// role providers can still end bootstrap behavior at evaluation time
-    /// (see <see cref="IsBootstrapActiveAsync"/>).</summary>
-    public bool Bootstrap { get; }
+    private readonly ISingleUserOwnerStore? _singleUserOwners;
 
     /// <summary>The <c>Ee:Admins</c> entries, for display as break-glass accounts.</summary>
     public IReadOnlyCollection<string> ValuesAdmins => _admins;
 
     public AdminAccess(IConfiguration cfg, ILogger<AdminAccess> log,
         IEnumerable<IAdminRoleProvider> roleProviders, IUserRoleStore? userRoles = null,
-        AgentHub.Api.Auth.HubAuthOptions? hubAuth = null)
+        AgentHub.Api.Auth.HubAuthOptions? hubAuth = null, ISingleUserOwnerStore? singleUserOwners = null)
     {
         _roleProviders = roleProviders;
         _userRoles = userRoles;
+        _singleUserOwners = singleUserOwners;
         var raw = cfg["Ee:Admins"] ?? "";
         _admins = raw.Split(new[] { ',', ';', ' ', '\n', '\t' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                      .ToHashSet(StringComparer.OrdinalIgnoreCase);
         // The key holder is the install's only interactive user. Left to Ee:Admins, an install
         // that lists someone else there would lock its own owner out of the admin area, and one
-        // that lists nobody would rely on bootstrap mode, which the first role set in the UI ends.
+        // that lists nobody would have no admin at all. Insecure development mode has exactly one
+        // user too, and is documented as "anyone who can reach it is an admin".
         if (hubAuth?.Mode == AgentHub.Api.Auth.HubAuthMode.ApiKey)
             _admins.Add(hubAuth.ApiKeyOwner);
-        Bootstrap = _admins.Count == 0;
-        if (Bootstrap)
-            log.LogWarning("Ee:Admins is empty — every signed-in user is an admin until someone is made an admin in the admin area or a group is mapped to the admin role. Set Ee:Admins or designate an admin to lock the admin area down.");
+        else if (hubAuth?.Mode == AgentHub.Api.Auth.HubAuthMode.InsecureDev)
+            _admins.Add(AgentHub.Api.Auth.HubAuthOptions.InsecureDevUser);
+        if (_admins.Count == 0)
+            log.LogWarning("Ee:Admins (Helm ee.admins) is empty. Unless an admin was designated in the admin area or through an admin group, nobody can open the admin area: set ee.admins to the preferred_username of the first administrator. See docs/admin-bootstrap.md.");
     }
 
     public bool IsValuesAdmin(string? owner) => !string.IsNullOrEmpty(owner) && _admins.Contains(owner);
 
-    /// <summary>True while no source designates any admin — every signed-in user is one.</summary>
-    public async Task<bool> IsBootstrapActiveAsync(CancellationToken ct = default)
+    /// <summary>
+    /// True when any source designates an admin. False means nobody can reach the admin area:
+    /// the app shows every signed-in user how to designate one (docs/admin-bootstrap.md).
+    /// </summary>
+    public async Task<bool> IsAdminDesignatedAsync(CancellationToken ct = default)
     {
-        if (!Bootstrap) return false;
-        if (_userRoles is not null && await _userRoles.AnyAdminAsync(ct)) return false;
+        if (_admins.Count > 0) return true;
+        if (_userRoles is not null && await _userRoles.AnyAdminAsync(ct))
+        {
+            // An admin row for a single-user owner does not count: ResolveAsync ignores it.
+            var reserved = await SingleUserOwnersAsync(ct);
+            foreach (var (owner, role) in await _userRoles.ListRolesAsync(ct))
+                if (role == UserRoleStore.AdminRole && !reserved.Contains(owner)) return true;
+        }
         foreach (var provider in _roleProviders)
-            if (await provider.HasAdminMappingsAsync(ct)) return false;
-        return true;
+            if (await provider.HasAdminMappingsAsync(ct)) return true;
+        return false;
     }
+
+    /// <summary>True when the owner is a name an install used without OIDC (see <see cref="RoleSources.SingleUserOwner"/>).</summary>
+    public async Task<bool> IsSingleUserOwnerAsync(string owner, CancellationToken ct = default)
+        => !IsValuesAdmin(owner) && (await SingleUserOwnersAsync(ct)).Contains(owner);
+
+    private async Task<HashSet<string>> SingleUserOwnersAsync(CancellationToken ct)
+        => _singleUserOwners is null
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(await _singleUserOwners.ListOwnersAsync(ct), StringComparer.OrdinalIgnoreCase);
 
     public async Task<bool> IsAdminAsync(string? owner, CancellationToken ct = default)
         => !string.IsNullOrEmpty(owner) && (await ResolveAsync(owner, ct)).IsAdmin;
@@ -105,17 +127,20 @@ public sealed class AdminAccess
     {
         if (IsValuesAdmin(owner)) return new(UserRoleStore.AdminRole, RoleSources.Values, []);
         var explicitRole = _userRoles is null ? null : await _userRoles.GetRoleAsync(owner, ct);
-        return await ResolveAsync(owner, explicitRole, bootstrapActive: null, ct);
+        return await ResolveAsync(owner, explicitRole, ct);
     }
 
     /// <summary>
-    /// Resolution with the explicit role and bootstrap state supplied by the caller, so listing
-    /// every user reads the roles table and the bootstrap sources once rather than per user.
+    /// Resolution with the explicit role supplied by the caller, so listing every user reads the
+    /// roles table once rather than per user.
     /// </summary>
-    public async Task<RoleResolution> ResolveAsync(string owner, string? explicitRole, bool? bootstrapActive,
-        CancellationToken ct = default)
+    public async Task<RoleResolution> ResolveAsync(string owner, string? explicitRole, CancellationToken ct = default)
     {
         if (IsValuesAdmin(owner)) return new(UserRoleStore.AdminRole, RoleSources.Values, []);
+        // Checked before the per-user role and groups: an admin row left from an earlier mode, or
+        // an admin group the new identity-provider user happens to be in, must not make the
+        // holder of the old owner's name an admin. Ee:Admins above is the deliberate way.
+        if (await IsSingleUserOwnerAsync(owner, ct)) return new(UserRoleStore.UserRole, RoleSources.SingleUserOwner, []);
         if (explicitRole is not null) return new(explicitRole, RoleSources.User, []);
 
         GroupRole? userGroups = null;
@@ -128,8 +153,6 @@ public sealed class AdminAccess
             userGroups ??= mapped;
         }
 
-        if (bootstrapActive ?? await IsBootstrapActiveAsync(ct))
-            return new(UserRoleStore.AdminRole, RoleSources.Bootstrap, []);
         return userGroups is not null
             ? new(UserRoleStore.UserRole, RoleSources.Group, userGroups.Groups)
             : new(UserRoleStore.UserRole, RoleSources.Default, []);
@@ -138,23 +161,19 @@ public sealed class AdminAccess
     /// <summary>
     /// Checked after a role change: true when an admin remains. A values admin always counts (it
     /// cannot be demoted in the UI); otherwise one of the known users has to resolve to admin.
-    /// A change that drops the instance back into bootstrap counts as removing the last admin
-    /// even though everyone then resolves to admin: demoting the last designated admin must
-    /// not quietly hand the admin area to every signed-in user.
+    /// Without that check an admin could demote the last admin and close the admin area until
+    /// someone edits the Helm values.
     /// </summary>
-    public async Task<bool> KeepsAnAdminAsync(bool bootstrapBefore, IEnumerable<string> knownOwners,
-        CancellationToken ct = default)
+    public async Task<bool> KeepsAnAdminAsync(IEnumerable<string> knownOwners, CancellationToken ct = default)
     {
         if (_admins.Count > 0) return true;
-        var bootstrap = await IsBootstrapActiveAsync(ct);
-        if (bootstrap && !bootstrapBefore) return false;
         IReadOnlyDictionary<string, string> roles = _userRoles is null
             ? new Dictionary<string, string>()
             : await _userRoles.ListRolesAsync(ct);
         foreach (var owner in knownOwners)
         {
             roles.TryGetValue(owner, out var explicitRole);
-            if ((await ResolveAsync(owner, explicitRole, bootstrap, ct)).IsAdmin) return true;
+            if ((await ResolveAsync(owner, explicitRole, ct)).IsAdmin) return true;
         }
         return false;
     }

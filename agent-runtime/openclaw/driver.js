@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const usage = require('../common/usage');
+const { escapeRegExp } = require('../common/model-switch');
 const { writeCredentialFile } = require('../common/credential-install');
 const { importToSqlite, validStore } = require('./sync-auth-profiles');
 
@@ -153,6 +154,16 @@ function readUsage({ env, home, fs: files = fs }) {
 
 module.exports = {
   slashCommands: require('./slash-commands'),
+  // Verified on 2026.7.1-2 (docs/design/live-model-switch.md): `/model <provider>/<model>` switches
+  // the running session, keeps it, and is stored with OpenClaw's session, so a restart with resume
+  // stays on it. It takes any id without checking it; a wrong one fails at the next turn.
+  // OpenClaw reports no turns to the session agent, so its own status line ("local ready | idle")
+  // is what says that it waits for input.
+  modelSwitch: {
+    command: model => '/model ' + model,
+    confirm: model => new RegExp('^\\s*model set to ' + escapeRegExp(model) + '\\s*$'),
+    idleScreen: rows => rows.some(row => /\|\s*idle\s*$/.test(row))
+  },
   readUsage,
   limitPatterns,
   // authFilename: AgentHub Secret key + root state-tar exclusion under ~/.openclaw/.
