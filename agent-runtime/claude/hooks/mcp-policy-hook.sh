@@ -142,8 +142,8 @@ if ! response="$("$CURL_BIN" -fsS --connect-timeout 1 --max-time 3 \
 fi
 
 # Prints "<decision> <restricted>", restricted being 1, 0 or "-" when the answer does not say.
-# A "deny" is honoured on its own: requiring "restricted" next to it is what let every blocked
-# tool through to the approval when the backend answered with the decision alone.
+# A "deny" is honoured on its own; "restricted" only feeds the remembered state, so an answer
+# that carries the decision alone still decides the call.
 if ! parsed="$(printf '%s' "$response" | "$NODE_BIN" -e '
   let data = "";
   process.stdin.on("data", chunk => data += chunk).on("end", () => {

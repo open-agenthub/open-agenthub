@@ -166,8 +166,7 @@ test('MCP policy denies a blocked MCP tool', async () => {
   }
 });
 
-// What InternalController.McpPolicy answered before #514: the decision alone. The hook required
-// "restricted" next to it and handed every blocked tool to the approval.
+// An answer with the decision alone still decides the call; "restricted" is optional to the hook.
 test('MCP policy denies on a decision-only deny', async () => {
   const server = await startPolicyServer({ body: JSON.stringify({ decision: 'deny' }) });
   try {

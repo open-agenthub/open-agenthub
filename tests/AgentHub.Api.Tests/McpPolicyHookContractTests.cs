@@ -18,9 +18,9 @@ namespace AgentHub.Api.Tests;
 
 /// <summary>
 /// Runs the Claude runtime's real mcp-policy-hook.sh against the real InternalController.McpPolicy
-/// served over HTTP with the backend's JSON options. The hook's own tests answer from a fake that
-/// sent the fields the hook expected, while the controller sent fewer — so every blocked tool fell
-/// through to the approval. Only a test that puts both real halves together catches that.
+/// served over HTTP with the backend's JSON options. The hook's own tests answer from a fake, and a
+/// fake can agree with the hook while the controller does not; only both real halves together
+/// check the contract between them.
 /// </summary>
 public sealed class McpPolicyHookContractTests : IDisposable
 {

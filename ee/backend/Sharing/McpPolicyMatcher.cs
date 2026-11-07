@@ -19,8 +19,8 @@ public static partial class McpPolicyMatcher
     /// Whether a tool call, named as <paramref name="agent"/>'s runtime names it, is blocked by
     /// names as the owner typed them: configured server names, and tool names in the
     /// <c>mcp__server__tool</c> form. Both sides go through <see cref="NormalizeMcpName"/>, because
-    /// a runtime does not hand the hook the configured spelling — compared verbatim, a block on
-    /// "ops.tools" never matched the Claude call <c>mcp__ops_tools__search</c>.
+    /// a runtime does not hand the hook the configured spelling: Claude reports the server
+    /// "ops.tools" as <c>mcp__ops_tools__…</c>.
     /// </summary>
     public static bool IsBlocked(
         AgentKind agent,
