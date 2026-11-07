@@ -1,0 +1,15 @@
+import { chromium } from 'playwright-core'
+const b = await chromium.connectOverCDP('http://127.0.0.1:19222'); const p = b.contexts()[0].pages()[0]
+const t0 = Date.now(); const log = (...a) => console.log(((Date.now() - t0) / 1000).toFixed(1) + 's', ...a)
+await p.locator('[data-get-license]').click()
+await p.locator('input[type=email]').fill('sales-audit@example.com')
+await p.locator('input[placeholder="Example Company"]').fill('Audit Example')
+await p.locator('.seats-field input').fill('3')
+const [resp] = await Promise.all([p.waitForResponse(r => r.url().includes('/license/checkout')), p.locator('[data-start-checkout]').click()])
+log('checkout api', resp.status())
+await p.waitForURL(/stripe|checkout/, { timeout: 30000 }).catch(e => log('no redirect', e.message))
+await p.waitForTimeout(8000)
+log('url host', new URL(p.url()).host)
+await p.screenshot({ path: process.env.SHOTS + '/05-stripe.png', fullPage: true })
+log((await p.locator('body').innerText()).replace(/\s+/g, ' ').slice(0, 1800))
+await b.close().catch(() => {})
