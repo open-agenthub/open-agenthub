@@ -117,13 +117,12 @@ public sealed class UsageAdminController : ControllerBase
 
         await using (await _roles.LockAsync(ct))
         {
-            var bootstrapBefore = await _access.IsBootstrapActiveAsync(ct);
             var previous = await _groups.GetGroupRoleAsync(name, ct);
             await _groups.SetGroupRoleAsync(name, req.Role, ct);
             // Unmapping or downgrading the only admin group can leave nobody able to reach the
             // admin area; check the outcome with the real precedence rules and undo it if so.
             var known = await _dir.ListAsync(ct);
-            if (!await _access.KeepsAnAdminAsync(bootstrapBefore, known.Select(u => u.Owner), ct))
+            if (!await _access.KeepsAnAdminAsync(known.Select(u => u.Owner), ct))
             {
                 await _groups.SetGroupRoleAsync(name, previous, ct);
                 return Conflict(new { error = "This would leave no admin. Make someone else an admin first." });

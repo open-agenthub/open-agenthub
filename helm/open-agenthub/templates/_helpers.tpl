@@ -170,6 +170,27 @@ Host=postgres.{{ .Release.Namespace }}.svc.cluster.local;Database=agenthub;Usern
 {{- if include "agenthub.apiKeyExistingSecret" . -}}{{ dig "auth" "apiKey" "existingSecretKey" "" .Values.AsMap | default "api-key" }}{{- else -}}api-key{{- end -}}
 {{- end -}}
 
+{{- /* Under OIDC, the name the API key acted as before the switch. The backend no longer gets
+       Auth__ApiKeyOwner then, but sessions, credentials and projects are still stored under that
+       name, and the identity-provider user who signs in with it would inherit them and could be
+       promoted by mistake (docs/admin-bootstrap.md). Carried forward through the ConfigMap, so the
+       upgrade after the switch, when the API-key Secret is gone, still knows it. Empty when none
+       is known, e.g. under `helm template`, where lookup returns nothing. */}}
+{{- define "agenthub.formerApiKeyOwner" -}}
+{{- $owner := dig "auth" "apiKey" "owner" "" .Values.AsMap -}}
+{{- $secret := lookup "v1" "Secret" .Release.Namespace "agenthub-api-key" -}}
+{{- $config := lookup "v1" "ConfigMap" .Release.Namespace "agenthub-config" -}}
+{{- if $owner -}}
+{{- $owner -}}
+{{- else if and $config $config.data (hasKey $config.data "Auth__FormerApiKeyOwner") -}}
+{{- index $config.data "Auth__FormerApiKeyOwner" -}}
+{{- else if and $config $config.data (hasKey $config.data "Auth__ApiKeyOwner") -}}
+{{- index $config.data "Auth__ApiKeyOwner" -}}
+{{- else if and $secret $secret.data (hasKey $secret.data "owner") -}}
+{{- index $secret.data "owner" | b64dec -}}
+{{- end -}}
+{{- end -}}
+
 {{- /* The owner the API key acts as. Decided once and then read back from the cluster: a later
        upgrade must not move an install from "admin" to "dev" or back, which would hide every
        session it has. The ConfigMap is the fallback for a Secret someone deleted to rotate the

@@ -185,8 +185,14 @@ storage can be skipped with `AGENTHUB_OBJECT_STORAGE=0` — not recommended.
    helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
      --set oidc.authority=<issuer-url> \
      --set oidc.clientId=<client-id> \
-     --set oidc.audience=<expected-audience>
+     --set oidc.audience=<expected-audience> \
+     --set-string ee.admins=<your-username>
    ```
+   With OIDC nobody is an administrator until one is named in `ee.admins` (the
+   `preferred_username`); more can be made admins in the admin area later
+   ([docs/admin-bootstrap.md](docs/admin-bootstrap.md)). Data created with the API key stays with
+   its owner (default `admin`) and becomes visible to the identity-provider user with that
+   username; choose a unique `auth.apiKey.owner`, or move or delete that data, before switching.
 4. **Store your credentials** (Settings → Credentials): SSH key or GitLab/GitHub token
    for repo access, plus an Anthropic, OpenAI, Cursor, or OpenCode API key if using API-key billing.
    OpenClaw ApiKey mode reuses those existing keys (pick Anthropic, OpenAI, or Cursor as the
@@ -271,7 +277,8 @@ that scope to `oidc.scope` alongside `openid profile email`.
 helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
   --set oidc.authority=https://identity.example.com \
   --set oidc.clientId=agenthub \
-  --set oidc.audience=agenthub
+  --set oidc.audience=agenthub \
+  --set-string ee.admins=<your-username>
 ```
 
 Opaque access tokens are not supported. An identity broker can supply compatible JWT

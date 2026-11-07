@@ -3,6 +3,16 @@ Open AgentHub {{ .Chart.AppVersion }} is installed in namespace {{ .Release.Name
 {{- if eq $mode "oidc" }}
 
 Sign-in: OIDC via {{ .Values.oidc.authority }}.
+{{- if not (trim (toString (.Values.ee.admins | default ""))) }}
+
+ADMINISTRATOR: ee.admins is empty. Nobody is an administrator until one is designated, so
+unless this release already has one (set in the admin area or through an admin group), nobody
+can open the admin area. Designate the first one by their OIDC username (preferred_username):
+
+  --set-string ee.admins=<username>
+
+Signed-in users see the same notice in the app until an administrator is designated.
+{{- end }}
 {{- else if eq $mode "apiKey" }}
 
 Sign-in: API key (no OIDC configured). The UI asks for it once per browser session; it acts

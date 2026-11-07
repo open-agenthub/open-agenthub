@@ -32,6 +32,10 @@ const editId = ref(null)
 const error = ref('')
 const sessionsLoaded = ref(false)
 const isAdmin = ref(false)
+// Set to the signed-in username while no admin is designated (docs/admin-bootstrap.md).
+const noAdminUser = ref('')
+// Admins only, under OIDC: names from API-key mode that still own data (docs/admin-bootstrap.md).
+const singleUserOwnerData = ref([])
 const settingsTab = ref(SETTINGS_DEFAULT_TAB)
 const query = ref('')
 const mobileNavigationOpen = ref(false)
@@ -186,7 +190,13 @@ onMounted(async () => {
   window.addEventListener('keydown', onKey)
   await refresh()
   refreshTimer = setInterval(refresh, 5000)
-  try { isAdmin.value = (await api.adminAccess()).isAdmin } catch {}
+  try {
+    const access = await api.adminAccess()
+    isAdmin.value = access.isAdmin
+    // Strictly false: an older backend does not send the field, and must not show the notice.
+    noAdminUser.value = access.adminDesignated === false ? (access.user || '') : ''
+    singleUserOwnerData.value = Array.isArray(access.singleUserOwnerData) ? access.singleUserOwnerData : []
+  } catch {}
 })
 
 onBeforeUnmount(() => {
@@ -233,6 +243,14 @@ onBeforeUnmount(() => {
       </header>
       <div v-if="auth.insecure" class="banner error" role="alert" data-insecure-dev-banner>
         <span>Insecure development mode: there is no login, and anyone who can reach this instance acts as admin. Configure OIDC or an API key before exposing it.</span>
+      </div>
+      <div v-if="noAdminUser" class="banner warn" role="status" data-no-admin-banner>
+        <span>No administrator is designated, so nobody can open the admin area. The operator designates one in the Helm values,
+          e.g. <code>ee.admins: "{{ noAdminUser }}"</code> for you, and upgrades the release.</span>
+      </div>
+      <div v-for="d in singleUserOwnerData" :key="d.owner" class="banner warn" role="status" data-single-user-owner-banner>
+        <span>Data from API-key mode is under the name <code>{{ d.owner }}</code> ({{ d.sessions }} session(s), {{ d.projects }} project(s)).
+          It is visible to the identity-provider user with the same username. Check it before that username can sign in.</span>
       </div>
       <div v-if="banner" class="banner" :class="banner.kind">
         <span>{{ banner.text }}</span>

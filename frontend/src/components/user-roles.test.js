@@ -9,7 +9,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../api.js', () => ({ api: mocks.api }))
 
 const overview = (patch = {}) => ({
-  bootstrap: false,
   groupMapping: true,
   valuesAdmins: ['root', 'breakglass'],
   users: [
@@ -75,12 +74,10 @@ describe('UserRolesCard', () => {
     expect(wrapper.get('[data-role-row="bob"] select').element.value).toBe('admin')
   })
 
-  it('warns while bootstrap makes everyone an admin', async () => {
-    mocks.api.adminRoles.mockResolvedValue(overview({ bootstrap: true, groupMapping: false }))
+  it('marks group mappings as Enterprise without a licence', async () => {
+    mocks.api.adminRoles.mockResolvedValue(overview({ groupMapping: false }))
     const wrapper = mount(UserRolesCard)
     await flushPromises()
-    expect(wrapper.find('[data-roles-bootstrap]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('every signed-in user is an admin')
     expect(wrapper.text()).toContain('(Enterprise)')
   })
 })

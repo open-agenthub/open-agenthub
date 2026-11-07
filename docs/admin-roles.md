@@ -15,9 +15,12 @@ which alternatives were turned down.
 | 1 | `values` — the owner is listed in `Ee:Admins` | admin | No. Shown as a break-glass admin. |
 | 2 | `user` — a role set for this user in *Users & seats* | admin or user | Yes (Community Edition). |
 | 3 | `group` — an OIDC group mapped to `admin` (Enterprise, licence-gated) | admin | Yes, in *Usage limits & groups*. |
-| 4 | `bootstrap` — no source designates any admin | admin | Ends as soon as one does. |
-| 5 | `group` — an OIDC group mapped to `user` | user | Label only. |
-| 6 | `default` | user | — |
+| 4 | `group` — an OIDC group mapped to `user` | user | Label only. |
+| 5 | `default` | user | — |
+
+Until #492 a fifth source sat before the `user` group: `bootstrap`, which made every signed-in
+user an admin while nobody was designated. It is gone; nobody is an admin by default, and the
+first one comes from `Ee:Admins`. `docs/admin-bootstrap.md` records why.
 
 The admin area lists every known user with this role and source (`GET /api/admin/roles`), and
 `Ee:Admins` entries who have never signed in are listed too, so the break-glass account is visible
@@ -45,9 +48,7 @@ about what a non-admin may do; it shows up as the source of a user's role in the
 Restricting sign-in was rejected for now because it changes the failure mode of a mistake from
 "someone is labelled wrongly" to "nobody can sign in": a typo in a group name, or an IdP whose
 groups claim is missing from one client's token, would lock out everyone who is not in
-`Ee:Admins`. It would also have to redefine bootstrap ("empty `Ee:Admins` means everyone is an
-admin"), because with a restriction in place "everyone" is no longer everyone who can reach the
-IdP. Access control on sign-in belongs to the IdP's client configuration, which already has it.
+`Ee:Admins`. Access control on sign-in belongs to the IdP's client configuration, which already has it.
 If it is needed in the hub later, it should be its own explicit setting, not a side effect of a
 role label.
 
@@ -71,13 +72,10 @@ Checking the outcome instead of predicting it keeps the precedence rules in one 
 "what-if" check would have to restate them — in SQL or in a second code path — and the copy is
 what drifts the day the rules change.
 
-**Falling back into bootstrap counts as removing the last admin.** Without that rule, demoting the
-only explicitly designated admin would leave nobody designated, bootstrap would start again, and
-every signed-in user would become an admin — the check would pass because "everyone" is an admin.
-The first version of this change had exactly that hole; the Postgres test
-`SetRole_RefusesToRemoveTheLastAdmin_IncludingYourself` caught it. Changes made *while* bootstrap
-is active are still allowed, so an admin can label people before designating anyone; designating
-the first admin ends bootstrap for everyone else, which the UI says next to the list.
+Before #492 this check had to treat "fell back into bootstrap" as removing the last admin, since
+everyone resolved to admin again once nobody was designated. Without bootstrap, demoting the last
+admin simply leaves none. The Postgres test `SetRole_RefusesToRemoveTheLastAdmin_IncludingYourself`
+covers it.
 
 Role changes take a Postgres advisory lock (`UserRoleStore.LockAsync`) around apply-check-undo.
 Without it, two admins demoting each other at the same moment on two replicas would each see the
@@ -103,7 +101,8 @@ trail survives the user it describes.
 
 | Method | Path | Edition | |
 |---|---|---|---|
-| GET | `/api/admin/roles` | CE | Users with role, source, groups, explicit role; `bootstrap`; `valuesAdmins`; `groupMapping` (licence active) |
+| GET | `/api/admin/access` | CE | Any signed-in user: `isAdmin`, `user`, `adminDesignated` (false = nobody is an admin yet) |
+| GET | `/api/admin/roles` | CE | Users with role, source, groups, explicit role; `valuesAdmins`; `groupMapping` (licence active) |
 | PUT | `/api/admin/users/{owner}/role` | CE | `{ "role": "admin" \| "user" \| null }`; 404 unknown user, 409 values admin or last admin |
 | GET | `/api/admin/roles/audit` | CE | Newest first, `?limit=` up to 1000 |
 | GET | `/api/ee/admin/groups` | EE | Groups seen at sign-in and mapped groups, with member counts |

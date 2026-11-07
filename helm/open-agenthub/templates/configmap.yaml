@@ -120,7 +120,11 @@ data:
   Oidc__Scope: {{ .Values.oidc.scope | quote }}
   Oidc__RequireHttpsMetadata: {{ .Values.oidc.requireHttpsMetadata | quote }}
   {{- $authMode := include "agenthub.authMode" . }}
-  {{- if eq $authMode "apiKey" }}
+  {{- if eq $authMode "oidc" }}
+  {{- with include "agenthub.formerApiKeyOwner" . }}
+  Auth__FormerApiKeyOwner: {{ . | quote }}
+  {{- end }}
+  {{- else if eq $authMode "apiKey" }}
   Auth__ApiKeyOwner: {{ include "agenthub.apiKeyOwner" . | quote }}
   {{- else if eq $authMode "insecureDev" }}
   Auth__InsecureDevMode: "true"
