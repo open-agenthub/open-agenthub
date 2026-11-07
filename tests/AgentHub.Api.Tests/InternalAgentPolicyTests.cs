@@ -156,7 +156,7 @@ public class InternalAgentPolicyTests
             Task.FromResult(policy);
     }
 
-    private sealed class CallbackSessionStore(SessionRecord session) : ISessionStore
+    internal sealed class CallbackSessionStore(SessionRecord session) : ISessionStore
     {
         public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task UpsertAsync(SessionRecord record, CancellationToken ct = default) => Task.CompletedTask;

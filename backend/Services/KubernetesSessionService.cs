@@ -26,6 +26,7 @@ namespace AgentHub.Api.Services;
 public sealed class KubernetesSessionService : ISessionService, IExecutionConversationSource, IProviderLoginRepository, IGitSessionCredentials
 {
     private readonly ISessionExecutionStore? _executions;
+    private readonly Ee.Sharing.ISessionMcpPolicyReader? _mcpPolicies;
     private readonly Kubernetes _k8s;
     private readonly ISessionExpiryLock? _runtimeUpdateLock;
     private readonly ISessionStore _store;
@@ -75,8 +76,10 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
         ISecretRequestStore? secretRequests = null,
         Kubernetes? cluster = null,
         IAgentPodRequests? podRequests = null,
-        Chat.IChatSessionCleanup? chatCleanup = null, ISessionExecutionStore? executions = null)
+        Chat.IChatSessionCleanup? chatCleanup = null, ISessionExecutionStore? executions = null,
+        Ee.Sharing.ISessionMcpPolicyReader? mcpPolicies = null)
     {
+        _mcpPolicies = mcpPolicies;
         _executions = executions;
         _chatCleanup = chatCleanup;
         _podRequests = podRequests;
@@ -2688,6 +2691,26 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
 
     // ---------------------------------------------------------------- Pod-Spec
 
+    /// <summary>
+    /// Seeds AGENTHUB_MCP_POLICY. The policy itself is read live on every MCP call; this only
+    /// decides what the Claude hook does when that read cannot reach the backend. A failed read
+    /// here counts as restricted: a pod whose restriction is unknown must not hand a blocked
+    /// tool to an approval a participant can grant.
+    /// </summary>
+    private async Task<bool> HasMcpRestrictionAsync(string sessionId, CancellationToken ct)
+    {
+        if (_mcpPolicies is null) return false;
+        try
+        {
+            return Ee.Sharing.McpPolicyMatcher.Restricts(await _mcpPolicies.GetMcpPolicyAsync(sessionId, ct));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogWarning(ex, "Could not read the MCP policy of session {SessionId}; starting it as restricted", sessionId);
+            return true;
+        }
+    }
+
     private async Task<PodBuildContext> BuildPodContextAsync(
         string owner, SessionRecord record, bool resume, bool hasGitCredentials, CancellationToken ct)
     {
@@ -2732,6 +2755,8 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
         await _store.SetUsageBillingAsync(record.Id,
             UsageBilling.ForPod(record.AuthMode, record.Mode, keyStored, hasSubscription), ct);
 
+        var mcpRestricted = await HasMcpRestrictionAsync(record.Id, ct);
+
         var ownerKey = Sanitize(owner);
         var claudeImage = string.IsNullOrWhiteSpace(_opts.ClaudeAgentImage) ? _opts.AgentImage : _opts.ClaudeAgentImage;
         var artifactUrls = AgentSessionResourceOrchestrator.PresignArtifactUrls(
@@ -2749,6 +2774,7 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
             HasSelectedSubscriptionCredential = hasSubscription,
             SubscriptionAccountId = accountId,
             HasGitCredentials = hasGitCredentials,
+            McpRestricted = mcpRestricted,
             CallbackUrl = $"{_callbackBaseUrl}/internal/sessions/{record.Id}",
             StatePutUrl = artifactUrls.StatePutUrl,
             StateGetUrl = artifactUrls.StateGetUrl,

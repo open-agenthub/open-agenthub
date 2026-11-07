@@ -463,7 +463,12 @@ public sealed class InternalController : ControllerBase
         return Ok(new { decision = "expired" });
     }
 
-    /// <summary>Evaluates the live MCP restriction policy for this session.</summary>
+    /// <summary>
+    /// Evaluates the live MCP restriction policy for this session. The Claude runtime's
+    /// mcp-policy-hook.sh reads both fields: <c>decision</c> decides this call, and
+    /// <c>restricted</c> is remembered in the pod so that a later call made while this endpoint
+    /// is unreachable is denied instead of handed to an approval a participant could grant.
+    /// </summary>
     [HttpPost("mcp-policy")]
     public async Task<IActionResult> McpPolicy(string id, [FromBody] PermissionBody body, CancellationToken ct)
     {
@@ -471,7 +476,7 @@ public sealed class InternalController : ControllerBase
         var policy = await _shares.GetMcpPolicyAsync(id, ct);
         var blocked = policy is not null && McpPolicyMatcher.IsBlocked(
             body.Tool ?? string.Empty, policy.BlockedServers, policy.BlockedTools);
-        return Ok(new { decision = blocked ? "deny" : "allow" });
+        return Ok(new { restricted = McpPolicyMatcher.Restricts(policy), decision = blocked ? "deny" : "allow" });
     }
 
     /// <summary>Evaluates persisted Codex policy after the authoritative live sharing policy.</summary>

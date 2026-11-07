@@ -98,8 +98,24 @@ case "$tool" in
   *) continue_flow ;;
 esac
 
+# What the last answer of /mcp-policy said about the session being restricted. The owner can
+# add or lift restrictions while the pod runs, so AGENTHUB_MCP_POLICY (set when the pod was
+# built) alone goes stale. Kept under the pod's private TMPDIR, which no restored archive brings
+# back from an earlier pod.
+RESTRICTED_STATE="${TMPDIR:-/tmp}/agenthub-mcp-policy-restricted"
+
+remember_restricted() {
+  printf '%s' "$1" > "$RESTRICTED_STATE.$$" 2>/dev/null && mv -f "$RESTRICTED_STATE.$$" "$RESTRICTED_STATE" 2>/dev/null
+  rm -f "$RESTRICTED_STATE.$$" 2>/dev/null
+}
+
 fail_closed() {
-  if [ "${AGENTHUB_MCP_POLICY:-0}" = "1" ]; then
+  # No usable answer for this call. In a restricted session the ordinary approval is not a safe
+  # fallback: a participant could allow the very tool the owner blocked, and auto-approve would
+  # allow it without anyone asked. Either source saying "restricted" denies; the agent can
+  # rewrite the state file but not the pod's environment, so deleting the file cannot lift a
+  # restriction the pod started with.
+  if [ "${AGENTHUB_MCP_POLICY:-0}" = "1" ] || [ "$(cat "$RESTRICTED_STATE" 2>/dev/null)" = "1" ]; then
     emit_deny
   fi
   continue_flow
@@ -125,18 +141,27 @@ if ! response="$("$CURL_BIN" -fsS --connect-timeout 1 --max-time 3 \
   fail_closed
 fi
 
-if ! decision="$(printf '%s' "$response" | "$NODE_BIN" -e '
+# Prints "<decision> <restricted>", restricted being 1, 0 or "-" when the answer does not say.
+# A "deny" is honoured on its own: requiring "restricted" next to it is what let every blocked
+# tool through to the approval when the backend answered with the decision alone.
+if ! parsed="$(printf '%s' "$response" | "$NODE_BIN" -e '
   let data = "";
   process.stdin.on("data", chunk => data += chunk).on("end", () => {
     let response;
     try { response = JSON.parse(data); } catch { process.exit(1); }
-    if (!response || typeof response.restricted !== "boolean" ||
-        !["allow", "deny"].includes(response.decision)) process.exit(1);
-    process.stdout.write(response.restricted && response.decision === "deny" ? "deny" : "allow");
+    if (!response || typeof response !== "object" || !["allow", "deny"].includes(response.decision))
+      process.exit(1);
+    const restricted = response.decision === "deny" || response.restricted === true ? "1"
+      : response.restricted === false ? "0" : "-";
+    process.stdout.write(response.decision + " " + restricted);
   });
 ')"; then
   fail_closed
 fi
+
+decision="${parsed%% *}"
+restricted="${parsed##* }"
+[ "$restricted" != "-" ] && remember_restricted "$restricted"
 
 if [ "$decision" = "deny" ]; then
   emit_deny

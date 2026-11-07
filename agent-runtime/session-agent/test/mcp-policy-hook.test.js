@@ -26,11 +26,16 @@ function runtimeEnvironment(environment) {
   };
 }
 
+// The hook remembers the last restriction it saw under TMPDIR; a fresh directory per run keeps
+// one test's answer from deciding the next one's backend-unreachable case.
 function runHook(input, environment = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(bashPath, [hookPath], {
       cwd: sessionAgentDir,
-      env: runtimeEnvironment(environment),
+      env: runtimeEnvironment({
+        TMPDIR: fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-mcp-state-')),
+        ...environment
+      }),
       stdio: ['pipe', 'pipe', 'pipe']
     });
     let stdout = '';
@@ -159,6 +164,52 @@ test('MCP policy denies a blocked MCP tool', async () => {
   } finally {
     await server.close();
   }
+});
+
+// What InternalController.McpPolicy answered before #514: the decision alone. The hook required
+// "restricted" next to it and handed every blocked tool to the approval.
+test('MCP policy denies on a decision-only deny', async () => {
+  const server = await startPolicyServer({ body: JSON.stringify({ decision: 'deny' }) });
+  try {
+    const result = await runHook({ tool_name: 'mcp__server__tool', tool_input: {} }, {
+      AGENTHUB_CALLBACK_URL: server.url,
+      AGENTHUB_CALLBACK_TOKEN: 'callback-token',
+      AGENTHUB_APPROVAL_HOOK: createApprovalHook()
+    });
+    assert.equal(result.output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.deepEqual(server.requests.map(request => request.path), ['/mcp-policy']);
+  } finally {
+    await server.close();
+  }
+});
+
+test('MCP policy remembers a restriction for a later unreachable backend', async () => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-mcp-state-'));
+  const server = await startPolicyServer({ body: JSON.stringify({ restricted: true, decision: 'allow' }) });
+  const environment = {
+    AGENTHUB_CALLBACK_URL: server.url,
+    AGENTHUB_CALLBACK_TOKEN: 'callback-token',
+    AGENTHUB_APPROVAL_HOOK: createApprovalHook(),
+    AGENTHUB_MCP_POLICY: '0',
+    TMPDIR: state
+  };
+  const first = await runHook({ tool_name: 'mcp__server__tool', tool_input: {} }, environment);
+  await server.close();
+  assert.equal(first.output.hookSpecificOutput.permissionDecision, 'ask');
+  assert.equal(fs.readFileSync(path.join(state, 'agenthub-mcp-policy-restricted'), 'utf8'), '1');
+
+  const second = await runHook({ tool_name: 'mcp__server__tool', tool_input: {} }, environment);
+  assert.equal(second.output.hookSpecificOutput.permissionDecision, 'deny');
+});
+
+test('a deleted state file does not lift the restriction the pod started with', async () => {
+  const result = await runHook({ tool_name: 'mcp__server__tool', tool_input: {} }, {
+    AGENTHUB_CALLBACK_URL: await closedServerUrl(),
+    AGENTHUB_CALLBACK_TOKEN: 'callback-token',
+    AGENTHUB_APPROVAL_HOOK: createApprovalHook(),
+    AGENTHUB_MCP_POLICY: '1'
+  });
+  assert.equal(result.output.hookSpecificOutput.permissionDecision, 'deny');
 });
 
 test('MCP policy hands an unrestricted response to the approval hook', async () => {

@@ -8,6 +8,10 @@ namespace AgentHub.Api.Ee.Sharing;
 
 public static class McpPolicyMatcher
 {
+    /// <summary>Whether the policy blocks anything at all; null is "no policy".</summary>
+    public static bool Restricts(SessionMcpPolicy? policy) =>
+        policy is not null && (policy.BlockedServers.Count > 0 || policy.BlockedTools.Count > 0);
+
     public static bool IsBlocked(
         string toolName,
         IReadOnlyCollection<string> blockedServers,
