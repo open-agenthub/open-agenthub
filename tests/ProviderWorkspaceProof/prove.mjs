@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 const control = 'agenthub', ns = 'agenthub-sessions';
 const kubectl = (...args) => execFileSync('kubectl', args, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
 const json = (...args) => JSON.parse(kubectl(...args, '-o', 'json'));
@@ -17,7 +17,7 @@ async function api(route, method = 'GET', body, expected = 200) {
   assert.equal(response.status, expected, method + ' ' + route + ': ' + await response.clone().text());
   const text = await response.text(); return text ? JSON.parse(text) : null;
 }
-let id, claim;
+let id, claim, replacementForward;
 try {
   await until(async () => { await api('credentials'); return true; });
   await api('credentials', 'PUT', { anthropicApiKey: 'synthetic-workspace-proof' }, 204);
@@ -58,6 +58,9 @@ try {
   // Turning admission off must not strand an already recorded claim on emptyDir.
   kubectl('-n', control, 'set', 'env', 'deployment/agenthub-backend', 'AgentHub__WorkspaceVolumePersistent=false');
   kubectl('-n', control, 'rollout', 'status', 'deployment/agenthub-backend', '--timeout=180s');
+  // A port-forward selects one pod and exits when that pod is replaced by this rollout.
+  replacementForward = spawn('kubectl', ['-n', control, 'port-forward', 'service/agenthub-backend', '18880:80'], { stdio: 'ignore' });
+  await until(async () => { await api('credentials'); return true; });
   await api('sessions/' + id + '/pause', 'POST');
   await until(() => { try { pod(); return false; } catch { return true; } });
   await api('sessions/' + id + '/resume', 'POST');
@@ -79,4 +82,5 @@ try {
   throw error;
 } finally {
   if (id) { try { await api('sessions/' + id, 'DELETE', undefined, 204); } catch { console.error('Proof session cleanup failed; inspect retained registry and PVC before deleting the disposable cluster.'); } }
+  replacementForward?.kill('SIGTERM');
 }
