@@ -44,8 +44,8 @@ pathname, and restore only the actual archive plus selected synthetic credential
 
 `gates.sql` installs a trigger only in the disposable proof database. Before a selected
 journal update commits, it holds an observable advisory lock while the previous phase stays
-visible. `barriers.mjs` checks the barrier against an isolated real PostgreSQL database: kill
-the blocked backend connection, verify rollback, then release and continue. This self-test
+visible. `barriers.mjs` checks the barrier against an isolated real PostgreSQL database: kill separate lifecycle/journal client processes, abort only the orphaned synthetic statement
+through its SQL gate, verify rollback, then release and continue. This self-test
 proves the fault mechanism, not application recovery.
 
 Dispatch `install-smoke` with `prove_provider_recovery=true` for the actual-worker matrix.
@@ -77,6 +77,12 @@ backend. It briefly parks competing workers on that advisory lease while the rep
 initializes, then releases it; it holds no table or row lock during startup. A held journal
 write plus queued schema DDL can otherwise block the proof's own observer. The real-PostgreSQL
 self-test reproduces that convoy and verifies handoff, schema completion and worker yield.
+The installed host can deny PostgreSQL backend-termination signals. A disconnected client
+also does not necessarily interrupt its deliberately unbounded query. The rig therefore
+waits for the separate lifecycle lease to prove backend death, then raises a SQL exception
+only inside the orphaned proof trigger. Advisory handoff exits through a separate SQL release
+flag, without database signals. This models an interrupted uncommitted write explicitly; it
+does not claim that all real SQL automatically rolls back immediately on TCP disconnect.
 Observer commands have statement/lock/process deadlines, and cleanup commits gate release
 before dropping the trigger. The application exposes no fault-control endpoint.
 

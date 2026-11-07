@@ -23,11 +23,11 @@ export function createRecoveryFaults({json,control='agenthub'}){
   const name='provider_recovery_handoff_'+sequence;
   // Queue before the crash, ahead of replicas trying the nonblocking lifecycle lease.
   // The lease holds no journal/table lock while a replacement runs schema initialization.
-  const child=spawn('kubectl',[...psql,`SET application_name='${name}'; SELECT pg_advisory_lock(hashtextextended('${id}',1)); SELECT pg_sleep(600);`],{stdio:['ignore','pipe','pipe']});
+  const child=spawn('kubectl',[...psql,`SET application_name='${name}'; SELECT pg_advisory_lock(hashtextextended('${id}',1)); DO $$ BEGIN WHILE NOT EXISTS(SELECT 1 FROM provider_recovery_proof_gates WHERE sequence=${sequence} AND handoff_released) LOOP PERFORM pg_sleep(0.1); END LOOP; END $$; SELECT pg_advisory_unlock(hashtextextended('${id}',1));`],{stdio:['ignore','pipe','pipe']});
   child.stdout.resume();let stderr='';child.stderr.on('data',bytes=>{stderr+=bytes;});
   child.on('error',error=>{failure=error;});
   child.once('exit',(code,signal)=>console.log('Recovery lease '+name+': client exit '+code+'/'+signal+(stderr?' ('+stderr.trim()+')':'')));
-  const lease={child,name};leases.add(lease);
+  const lease={child,name,sequence};leases.add(lease);
   lease.pid=await wait(()=>sql(`SELECT a.pid FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid WHERE a.application_name='${name}' AND l.locktype='advisory' AND NOT l.granted;`),'external lifecycle waiter queues');
   assert(/^\d+$/.test(lease.pid));
   console.log('Recovery lease '+name+': queued database PID '+lease.pid);
@@ -37,7 +37,7 @@ export function createRecoveryFaults({json,control='agenthub'}){
   const exited=new Promise(resolve=>{if(lease.child.exitCode!==null||lease.child.signalCode!==null)resolve();else lease.child.once('exit',resolve);});
   // The connection can queue successfully before its PID reaches the observer; cleanup
   // still needs to release that remote lease if observation itself fails.
-  sql(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name='${lease.name}';`);
+  sql('UPDATE provider_recovery_proof_gates SET handoff_released=TRUE WHERE sequence='+lease.sequence+';');
   await wait(()=>sql(`SELECT count(*) FROM pg_stat_activity WHERE application_name='${lease.name}';`)==='0','external lifecycle database connection disappears',true);
   let timer;
   try { await Promise.race([exited,new Promise(resolve=>{timer=setTimeout(resolve,2000);})]); }
@@ -67,9 +67,13 @@ export function createRecoveryFaults({json,control='agenthub'}){
     const lease=await park(id,gate.sequence);
     execFileSync('kubectl',['-n',control,'delete','pod',backend.metadata.name,'--grace-period=0','--wait=true','--timeout=90s'],{stdio:'pipe',timeout:100000});
     console.log('Recovery '+requestId+': deleted backend '+backend.metadata.name+' for writer PID '+pid);
-    await wait(()=>sql('SELECT count(*) FROM pg_stat_activity WHERE pid='+Number(pid)+';')==='0','crashed backend connection disappears');
-    console.log('Recovery '+requestId+': crashed writer connection disappeared');
     await wait(()=>sql(`SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=${Number(lease.pid)} AND locktype='advisory' AND granted);`)==='t','external lifecycle lease acquired');
+    // A disconnected client's deliberately unbounded query may keep running in PostgreSQL.
+    // Abort only this synthetic barrier after lifecycle ownership proves the backend died;
+    // host confinement can deny pg_terminate_backend signals even for the same DB role.
+    sql('UPDATE provider_recovery_proof_gates SET aborted=TRUE WHERE sequence='+gate.sequence+';');
+    await wait(()=>sql('SELECT count(*) FROM pg_stat_activity WHERE pid='+Number(pid)+';')==='0','crashed backend connection disappears');
+    console.log('Recovery '+requestId+': synthetic writer aborted after backend death');
     console.log('Recovery '+requestId+': external lifecycle lease acquired');
     assert.equal(sql(`SELECT phase FROM session_provider_switches WHERE request_id='${requestId}';`),before,'crash rolls back the unacknowledged phase write');
     assert.equal(snapshot(),identity,'generation/provider/authority rotation must roll back with the interrupted phase');
@@ -92,7 +96,7 @@ export function createRecoveryFaults({json,control='agenthub'}){
    stopping=true;
    // Release commits separately: combining this UPDATE with DROP TRIGGER in one -c batch
    // would wait for a writer that cannot observe the uncommitted gate release.
-   sql('UPDATE provider_recovery_proof_gates SET released=TRUE;');
+   sql('UPDATE provider_recovery_proof_gates SET aborted=TRUE,released=TRUE,handoff_released=TRUE;');
    for(const lease of [...leases])await unpark(lease);
    await Promise.all(operations.values());
    sql('DROP TRIGGER provider_recovery_proof_gate ON session_provider_switches; DROP FUNCTION provider_recovery_proof_barrier(); DROP TABLE provider_recovery_proof_gates;');

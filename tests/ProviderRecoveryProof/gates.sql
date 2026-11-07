@@ -1,6 +1,7 @@
 CREATE TABLE provider_recovery_proof_gates (
     request_id UUID NOT NULL, sequence INTEGER PRIMARY KEY, phase TEXT NOT NULL,
-    stop_ack BOOLEAN, released BOOLEAN NOT NULL DEFAULT FALSE
+    stop_ack BOOLEAN, released BOOLEAN NOT NULL DEFAULT FALSE,
+    aborted BOOLEAN NOT NULL DEFAULT FALSE, handoff_released BOOLEAN NOT NULL DEFAULT FALSE
 );
 CREATE FUNCTION provider_recovery_proof_barrier() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE gate_sequence INTEGER;
@@ -14,6 +15,9 @@ BEGIN
         -- Killing that backend must leave the previously saved phase intact.
         PERFORM pg_advisory_xact_lock(529,gate_sequence);
         WHILE EXISTS(SELECT 1 FROM provider_recovery_proof_gates WHERE sequence=gate_sequence AND NOT released) LOOP
+            IF EXISTS(SELECT 1 FROM provider_recovery_proof_gates WHERE sequence=gate_sequence AND aborted) THEN
+                RAISE EXCEPTION 'external proof transaction aborted';
+            END IF;
             PERFORM pg_sleep(0.1);
         END LOOP;
     END IF;
