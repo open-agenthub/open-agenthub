@@ -55,6 +55,7 @@ public class ExecutionFenceTests
             Assert.Equal(HttpStatusCode.NoContent, callbackResponse.StatusCode);
             await using (var exclusive = await retirement.WaitAsync(TimeSpan.FromSeconds(5)))
             {
+                Assert.NotNull(exclusive);
                 await using var connection = new NpgsqlConnection(database.Configuration.GetConnectionString("Postgres"));
                 await connection.OpenAsync();
                 await using var change = new NpgsqlCommand("UPDATE sessions SET callback_token='target-token',execution_generation=1 WHERE id='s'", connection);

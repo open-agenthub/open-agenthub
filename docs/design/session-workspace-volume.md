@@ -132,3 +132,29 @@ silent truncation or automatic replay. Prove native admission without capacity m
 against the real pinned CLIs and a recording model; custom unknown/small limits remain
 negative cases. A universal unknown-window rejection was rejected because native probes
 currently omit that optional field and would make the owner's requested case unusable.
+
+## Durable replacement journal
+
+Keep the reviewed target selection and exact handover immutable in a separate journal.
+A partial unique index allows one unfinished replacement per session. Admission and the
+registry's pending flag change together; source-generation compare-and-set prevents stale
+reviews from starting another execution. Retry clears an explicit error on the same phase;
+background polling skips errors, rather than replaying an uncertain handover automatically.
+Cancellation is available only before the source-stopped phase and leaves source authority
+unchanged. The orchestrator must additionally confirm that the recorded source pod still
+exists before unreserving it.
+
+After the orchestrator confirms source disappearance while holding the lifecycle lock,
+target admission takes the exclusive execution fence, drains source callbacks and outgoing
+credential requests, rotates the callback token/native ID, and advances the registry's
+execution generation in the same database transaction as the target-admitted journal phase.
+It does not advance the visible history ledger: target delivery confirmation and archive
+checkpoint must precede that separate commit. Pending target snapshots therefore cannot
+replace source conversation reads. New native credentials are references to the target's
+account or key, never credential bytes copied into the journal.
+
+Rejected: recording progress only in pod annotations, which disappears on deletion and
+cannot atomically rotate registry authority; and automatically restarting a target after an
+ambiguous create or handover, which can replay the owner's instructions. A durable phase is
+necessary but does not alone prove pod disappearance, safe-point admission or exact target
+delivery. Those remain responsibilities of the orchestrator and real-cluster proofs.

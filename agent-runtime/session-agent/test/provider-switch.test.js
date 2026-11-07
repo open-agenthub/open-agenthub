@@ -54,3 +54,11 @@ test('target holds user input until native evidence and archive checkpoint, but 
   assert.equal(h.terminals[0].writes.length, reserved);
   assert.equal((await requestHttp(h, 'DELETE', '/agenthub/provider-switch', headers, JSON.stringify({ requestId: nextId }))).status, 200);
 });
+
+test('a target without a configured native archive cannot release its reservation', async () => {
+  const file = '/home/agent/.test-agent/conversation.jsonl';
+  const h = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token', AGENTHUB_PROVIDER_SWITCH_ID: requestId, AGENTHUB_PROMPT: 'handover' },
+    { supportsProviderSwitch: true, turnHooks: true, findTranscript: () => file, nativeIdentity: () => 'native-one' },
+    { files: { [file]: JSON.stringify({ type: 'user', message: { role: 'user', content: 'handover' } }) + '\n' } });
+  assert.equal((await route(h, 'release')).status, 409);
+});

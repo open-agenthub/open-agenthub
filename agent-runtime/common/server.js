@@ -2334,7 +2334,7 @@ function createCommonServer(options = {}) {
       if (body.action === 'release' && providerTargetReleased && providerTargetRequest === body.requestId)
         return sendJson(response, 200, { ...providerNativeState(), checkpointed: true });
       const state = providerNativeState();
-      if (providerTargetRequest !== body.requestId || !state.ready || !state.markerSeen ||
+      if (!statePut || stateWithheld || providerTargetRequest !== body.requestId || !state.ready || !state.nativeId || !state.markerSeen ||
           (body.nativeId && body.nativeId !== state.nativeId)) return fileError(response, 409, 'handover_not_confirmed');
     } else return fileError(response, 400, 'invalid_switch_action');
     return persistAll(error => {

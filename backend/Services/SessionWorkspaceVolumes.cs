@@ -35,7 +35,11 @@ public sealed class SessionWorkspaceVolumes(Kubernetes cluster, ISessionWorkspac
             throw new InvalidOperationException("Repository layout changes are unavailable for a persistent workspace.");
         V1PersistentVolumeClaim? claim = null;
         try { claim = await cluster.CoreV1.ReadNamespacedPersistentVolumeClaimAsync(workspace.ClaimName, ns, cancellationToken: ct); }
-        catch (k8s.Autorest.HttpOperationException error) when (error.Response.StatusCode == HttpStatusCode.NotFound) { }
+        catch (k8s.Autorest.HttpOperationException error) when (error.Response.StatusCode == HttpStatusCode.NotFound)
+        {
+            if (workspace.ClaimUid is not null)
+                throw new InvalidOperationException("The recorded workspace claim is missing. Restore it before restarting the session.", error);
+        }
         if (claim is null)
         {
             if (workspace.ClaimUid is not null)
@@ -92,7 +96,7 @@ public sealed class SessionWorkspaceVolumes(Kubernetes cluster, ISessionWorkspac
                 await Task.Delay(500, timeout.Token);
             }
         }
-        catch (k8s.Autorest.HttpOperationException error) when (error.Response.StatusCode == HttpStatusCode.NotFound) { }
+        catch (k8s.Autorest.HttpOperationException error) when (error.Response.StatusCode == HttpStatusCode.NotFound) { return; }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         { throw new TimeoutException("Workspace claim is still terminating; retry session deletion."); }
     }
