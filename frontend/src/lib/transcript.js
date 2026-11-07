@@ -130,7 +130,7 @@ export function toTranscriptBlocks(text) {
   return packBlocks(deduplicateAdjacent(suppressShortBursts(meaningful)))
 }
 
-const ROLE_LABELS = { boundary: 'Conversation cleared', user: 'User', assistant: 'Agent', tool: 'Tool', result: 'Result' }
+const ROLE_LABELS = { boundary: 'Conversation cleared', user: 'User', assistant: 'Agent', tool: 'Tool', result: 'Result', note: 'Note' }
 
 export function entryLabel(entry) {
   if (entry.role === 'tool' && entry.tool) return `Tool · ${entry.tool}`
