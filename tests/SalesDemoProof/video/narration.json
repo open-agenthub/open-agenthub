@@ -46,7 +46,7 @@
     {
       "id": "close",
       "card": true,
-      "text": "This instance was set up with the one-line quickstart, then a hostname, TLS and single sign-on from one values file. On a slow emulated machine the install took under six minutes and the switch to team login about two, plus two setup gaps we found on the way. The evaluation checklist lists every step, the measured times, those gaps and the known limits. The next step is a trial on your own cluster."
+      "text": "This instance was set up with the one-line quickstart, then a hostname, TLS and single sign-on from one values file. On a slow emulated machine the install took under six minutes and the switch to team login about two, plus two setup gaps we found on the way. The evaluation checklist lists every step, the measured times, those gaps and the known limits. The next step: a technical check of your setup against this checklist, then a start with guided onboarding."
     }
   ]
 }

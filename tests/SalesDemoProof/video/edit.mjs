@@ -126,7 +126,7 @@ for (const id of order) {
     const duration = LEAD + voice + CARD_TAIL
     const title = id === 'title'
       ? `<div style="font-size:84px;font-weight:800">Open AgentHub 1.19.0</div><div style="font-size:44px;margin-top:22px;color:#cfcfcf">Issue → pushed branch, with a colleague taking over</div>`
-      : `<div style="font-size:60px;font-weight:800">Try it on your own cluster</div><div style="font-size:36px;margin-top:22px;color:#cfcfcf">Quickstart → hostname, TLS and single sign-on → first task.<br>Prospect checklist: steps, measured times, known limits.</div>`
+      : `<div style="font-size:60px;font-weight:800">Next: a technical check of your setup</div><div style="font-size:36px;margin-top:22px;color:#cfcfcf">Quickstart → hostname, TLS and single sign-on → first task.<br>Evaluation checklist: steps, measured times, known limits. Then guided onboarding.</div>`
     const card = await png(`<div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;text-align:center">${title}</div>${label}`, `${outDir}/work/${id}-card.png`, false)
     // One shared page renders every overlay, so they are made one after another; in parallel each
     // screenshot caught whichever content was set last.
