@@ -34,7 +34,10 @@ git push -q 2>&1; git log --oneline -2`
 let n = 0
 function reply(body) {
   const msgs = body.messages || []
-  const last = msgs[msgs.length - 1] || {}
+  // Claude Code may append a system message (e.g. a deferred-tools notice) after a tool result;
+  // read the turn from the last non-system message, or the result looks unanswered and the
+  // script runs a second time.
+  const last = [...msgs].reverse().find(m => m.role !== 'system') || {}
   const all = JSON.stringify(msgs)
   const lastUser = [...msgs].reverse().find(m => m.role === 'user' && !(Array.isArray(m.content) && m.content.some(b => b.type === 'tool_result')))
   const asked = JSON.stringify(lastUser?.content || '')

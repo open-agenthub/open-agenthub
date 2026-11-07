@@ -255,6 +255,13 @@ const summary = bob.getByText('[stand-in model standin-deep] Summary for the rev
 await summary.waitFor({ timeout: 300000 })
 await summary.evaluate(el => el.scrollIntoView({ block: 'start' }))
 await pause(bob, 800)
+// Where the answer and the raw block are, so the edit can crop to the answer (#515).
+timeline.facts.summaryBox = await summary.boundingBox()
+timeline.facts.rawBottom = await bob.evaluate(() => {
+  const raw = /local-command-stdout|command-name/
+  const deepest = [...document.querySelectorAll('body *')].filter(el => raw.test(el.textContent || '') && ![...el.children].some(c => raw.test(c.textContent || '')))
+  return Math.max(0, ...deepest.map(el => el.getBoundingClientRect().bottom))
+})
 mark('cut-end', 'raw-model-output')
 await ring(bob, summary, 4000); await unring(bob)
 

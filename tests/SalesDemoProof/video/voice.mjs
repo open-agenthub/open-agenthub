@@ -4,7 +4,7 @@
 //   node voice.mjs <narration.json> <outdir>
 import fs from 'node:fs'
 import { KokoroTTS } from 'kokoro-js'
-import { StyleTextToSpeech2Model, AutoTokenizer } from '@huggingface/transformers'
+import { StyleTextToSpeech2Model, AutoTokenizer, RawAudio } from '@huggingface/transformers'
 
 const [file, out] = process.argv.slice(2)
 const MODEL = 'onnx-community/Kokoro-82M-v1.0-ONNX'
@@ -17,7 +17,17 @@ const tts = new KokoroTTS(model, await AutoTokenizer.from_pretrained(MODEL, { re
 for (const s of script.scenes) {
   // Spoken forms the voice gets wrong as written; the captions keep the written text.
   const spoken = s.text.replace(/AgentHub/g, 'Agent Hub').replace(/\bMCP\b/g, 'M C P').replace(/\bAPI\b/g, 'A P I').replace(/\bTLS\b/g, 'T L S')
-  const audio = await tts.generate(spoken, { voice: script.voice })
-  await audio.save(`${out}/${s.id}.wav`)
-  console.log(s.id, (audio.audio.length / audio.sampling_rate).toFixed(2), 's')
+  // One call per sentence: a whole paragraph is cut off silently at the model's input limit
+  // (the session scene lost its last sentences that way).
+  const parts = [], gap = 0.18
+  let rate = 24000
+  for (const sentence of spoken.match(/[^.!?]+[.!?]+/g) || [spoken]) {
+    const a = await tts.generate(sentence.trim(), { voice: script.voice })
+    rate = a.sampling_rate
+    parts.push(a.audio, new Float32Array(Math.round(gap * rate)))
+  }
+  const joined = new Float32Array(parts.reduce((n, p) => n + p.length, 0))
+  let o = 0; for (const p of parts) { joined.set(p, o); o += p.length }
+  await new RawAudio(joined, rate).save(`${out}/${s.id}.wav`)
+  console.log(s.id, (joined.length / rate).toFixed(2), 's')
 }

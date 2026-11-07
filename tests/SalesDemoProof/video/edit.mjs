@@ -17,7 +17,7 @@ import { chromium } from 'playwright-core'
 
 const [takeDir, voiceDir, narrationFile, outDir] = process.argv.slice(2).map(p => path.resolve(p))
 const FFMPEG = process.env.FFMPEG || 'ffmpeg', FFPROBE = process.env.FFPROBE || 'ffprobe'
-const FPS = 25, MAX_WAIT = 4, LEAD = 0.5, TAIL = 1.0, CARD_TAIL = 1.5
+const FPS = 25, MAX_WAIT = 8, LEAD = 0.5, TAIL = 1.0, CARD_TAIL = 1.5
 fs.mkdirSync(`${outDir}/work`, { recursive: true })
 const tl = JSON.parse(fs.readFileSync(`${takeDir}/timeline.json`, 'utf8'))
 const narration = JSON.parse(fs.readFileSync(narrationFile, 'utf8'))
@@ -47,6 +47,28 @@ const ranges = (a, b) => {
 const waits = ranges('wait-start', 'wait-end'), cuts = ranges('cut-start', 'cut-end')
 const frameAt = t => { let lo = 0, hi = frames.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (frames[mid].t <= t) lo = mid; else hi = mid - 1 } return frames[lo] }
 
+// The model scene's answer, below the raw /model block (#515): a 16:9 window that starts under
+// the block and contains the answer, scaled to full size. Null when the take has no positions.
+const crop = (() => {
+  const box = tl.facts?.summaryBox, raw = tl.facts?.rawBottom
+  if (!box) return null
+  const w = 864, h = 486
+  const x = Math.round(Math.min(Math.max(box.x + box.width / 2 - w / 2, 0), 1920 - w))
+  const y = Math.round(Math.min(Math.max((raw || 0) + 8, box.y + box.height + 60 - h, 0), 1080 - h))
+  if (box.y < y || box.y + box.height > y + h) throw Error(`answer does not fit the crop window (y ${y})`)
+  return { x, y, w, h }
+})()
+const cropped = new Map()
+function cropFrame(file) {
+  if (!cropped.has(file)) {
+    const target = `${outDir}/work/crop-${path.basename(file)}`
+    execFileSync(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-y', '-i', `${takeDir}/${file}`, '-vf',
+      `crop=${crop.w}:${crop.h}:${crop.x}:${crop.y},scale=1920:1080:flags=lanczos`, '-q:v', '2', target])
+    cropped.set(file, target)
+  }
+  return cropped.get(file)
+}
+
 // Output frames for one scene: walk source time at 1/FPS per output frame, faster inside waits,
 // jumping over cuts. Returns [{file,user,wait}] per output frame.
 function sceneFrames(t0, t1) {
@@ -58,7 +80,10 @@ function sceneFrames(t0, t1) {
     const w = waits.find(([a, b]) => t >= a && t < b)
     const speed = w ? Math.max(1, (w[1] - w[0]) / MAX_WAIT) : 1
     const f = frameAt(t)
-    outFrames.push({ file: f.file, user: f.user, wait: w && speed > 1.05 ? Math.round(speed) : 0 })
+    // After a cut the frame is cropped to the area the take recorded (cropFrame), so what the
+    // cut removed does not come back on screen.
+    const file = cuts.some(([, b]) => t >= b && b >= t0) && crop ? cropFrame(f.file) : f.file
+    outFrames.push({ file, user: f.user, wait: w && speed >= 2 ? Math.round(speed) : 0 })
     t += speed / FPS
   }
   return outFrames
@@ -119,8 +144,9 @@ for (const id of order) {
   const duration = out.length / FPS
   // concat list: runs of the same source frame collapse into one entry.
   let list = 'ffconcat version 1.0\n', i = 0
-  while (i < out.length) { let j = i; while (j < out.length && out[j].file === out[i].file) j++; list += `file '${takeDir}/${out[i].file}'\nduration ${((j - i) / FPS).toFixed(4)}\n`; i = j }
-  list += `file '${takeDir}/${out[out.length - 1].file}'\n`
+  const abs = f => path.isAbsolute(f) ? f : `${takeDir}/${f}`
+  while (i < out.length) { let j = i; while (j < out.length && out[j].file === out[i].file) j++; list += `file '${abs(out[i].file)}'\nduration ${((j - i) / FPS).toFixed(4)}\n`; i = j }
+  list += `file '${abs(out[out.length - 1].file)}'\n`
   fs.writeFileSync(`${outDir}/work/${id}.ffconcat`, list)
   // Overlay windows: user badge per run of the same user, "sped up" per wait run, captions.
   const windows = []
