@@ -69,8 +69,10 @@ public sealed partial class KubernetesSessionService
     public async Task<ProviderSwitchOperation> StartProviderSwitchAsync(string owner, string id, ProviderSwitchSelection selection, CancellationToken ct)
     {
         await using var held = await SwitchLockAsync(id, ct);
-        var existing = _providerSwitches is null ? null : await _providerSwitches.GetAsync(owner, id, ct);
-        if (existing?.Request.RequestId == selection.RequestId)
+        _ = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
+        var journal = _providerSwitches ?? throw new ProviderReplacementRefusedException("Provider replacement services are unavailable.");
+        var existing = await journal.GetAsync(owner, id, ct);
+        if (existing is not null && existing.Request.RequestId == selection.RequestId)
         {
             if (selection.ReviewHash is null || selection.ReviewHash != existing.Request.ReviewHash)
                 throw new ProviderReplacementRefusedException("Replacement request ID already has a different review.");
@@ -82,9 +84,9 @@ public sealed partial class KubernetesSessionService
         var pod = await RequireSourcePodAsync(record, null, ct);
         var workspace = (await _workspaceVolumes!.EnsureAsync(record, ct))!;
         await _executions!.EnsureLegacyAsync(owner, id, ct);
-        await _providerSwitches!.CreateAsync(owner, new(selection.RequestId, id, record.ExecutionGeneration, record.Agent,
+        await journal.CreateAsync(owner, new(selection.RequestId, id, record.ExecutionGeneration, record.Agent,
             pod.Metadata.Uid, workspace.ClaimUid!, review.Target, review.Text, review.ReviewHash), ct);
-        return (await _providerSwitches.GetAsync(owner, id, ct))!;
+        return (await journal.GetAsync(owner, id, ct))!;
     }
 
     private async Task<ProviderSwitchTarget> PreflightProviderTargetAsync(SessionRecord source, ProviderSwitchTarget target, CancellationToken ct)

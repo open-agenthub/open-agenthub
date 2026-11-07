@@ -142,7 +142,7 @@ public sealed class PostgresProviderSwitchStore(IConfiguration configuration, IE
         if (usageSnapshots is not null)
         {
             var checkpoint = await GetAsync(owner, id, ct);
-            if (checkpoint?.Request.RequestId != requestId || checkpoint.Progress.Phase != "source-stopped")
+            if (checkpoint is null || checkpoint.Request.RequestId != requestId || checkpoint.Progress.Phase != "source-stopped")
                 throw new InvalidOperationException("Replacement is not ready for target admission.");
             // Finish this FK-backed snapshot before locking the registry row below: a second
             // connection inserting its session reference would otherwise wait on our own lock.

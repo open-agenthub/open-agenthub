@@ -77,8 +77,7 @@ try{
   watcher=spawn('kubectl',['-n',ns,'get','pods','-l','agenthub.dev/session='+id,'--watch','--output-watch-events','-o','jsonpath={.type}{"\\t"}{.object.metadata.uid}{"\\n"}'],{stdio:['ignore','pipe','ignore']});
   watcher.stdout.on('data',chunk=>{remainder+=chunk;const lines=remainder.split('\n');remainder=lines.pop();for(const line of lines){const [type,uid]=line.split('\t');watchEvents.push({type,uid});}});
   for(const [generation,target] of [[1,'Codex'],[2,'Claude']]){
-   await sleep(2000);
-   const source=pod();
+   const source=await until(()=>{const value=pod();return value.status.phase==='Running'&&value.status.containerStatuses?.some(container=>container.name==='agent'&&container.ready)&&value;},'source kubelet readiness');
    const sourceToken=source.spec.containers.find(container=>container.name==='agent').env.find(item=>item.name==='AGENTHUB_CALLBACK_TOKEN').value;
    exec("printf 'private source home' > /home/agent/provider-proof-private");
    const selection={requestId:crypto.randomUUID(),target:{agent:target,authMode,credentialId:authMode==='Subscription'?'default':null,modelEndpointUrl:null,modelName:null},
