@@ -92,7 +92,7 @@ try{
   await api('sessions/'+id+'/provider-switch/cancel','POST',{requestId:cancelId});
   await until(async()=>{const value=await api('sessions/'+id+'/provider-switch');return value.operation?.progress.phase==='cancelled';},'durable cancellation completes');
   assert.equal(pod().metadata.uid,first.metadata.uid);
-  await until(async()=>{const page=await api('sessions/'+id+'/conversation?offset=0&max=500');return page.entries?.some(entry=>entry.text.includes('CANCEL-QUEUED-'+authMode));},'queued source message after cancellation');
+  await until(()=>{const rows=JSON.parse(exec(`node -e 'fetch(${JSON.stringify(process.env.PROOF_MODEL_URL+'/proof/requests')}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))'`));return rows.some(row=>row.agent==='claude'&&row.authMode===authMode&&row.containsCancelled);},'model receives queued source message after cancellation');
   shell.close();shell=null;
   console.log(authMode+': actual source shell refusal, cancellation and queued-message handback passed.');
   const watchEvents=[];let remainder='';
@@ -149,7 +149,7 @@ try{
     return nativeRequests.some(row=>row.marker==='SWITCH-PROOF-'+generation&&row.agent===target.toLowerCase()&&row.authMode===authMode);
    },'real native inference with selected target credential mode');
    const late=await fetch('http://127.0.0.1:18880/internal/sessions/'+id+'/status',{method:'POST',headers:{'Content-Type':'application/json','X-Agent-Token':sourceToken},body:JSON.stringify({status:'Failed'})});assert.equal(late.status,401);
-   const page=await until(async()=>{const approvals=await api('sessions/'+id+'/permissions');for(const approval of approvals)await api('sessions/'+id+'/permissions/'+approval.id,'POST',{decision:'deny'});const value=await api('sessions/'+id+'/conversation?offset=0&max=500');return value.entries?.some(entry=>entry.generation===generation&&entry.text.includes('QUEUED-AFTER-HANDOVER-'+generation))&&value;},'queued message after native handover');
+   const page=await until(async()=>{const approvals=await api('sessions/'+id+'/permissions');for(const approval of approvals)await api('sessions/'+id+'/permissions/'+approval.id,'POST',{decision:'deny'});const rows=JSON.parse(exec(`node -e 'fetch(${JSON.stringify(process.env.PROOF_MODEL_URL+'/proof/requests')}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))'`));return rows.some(row=>row.marker==='SWITCH-PROOF-'+generation&&row.agent===target.toLowerCase()&&row.authMode===authMode&&row.containsQueued)&&await api('sessions/'+id+'/conversation?offset=0&max=500');},'model receives queued message after native handover');
    assert.equal(exec('test ! -e /workspace/provider-proof-not-authorized && printf absent'),'absent');
    if(generation===2)await until(()=>{
     const records=JSON.parse(exec(`node -e 'fetch(${JSON.stringify(process.env.PROOF_MODEL_URL+'/proof/requests')}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))'`));
@@ -174,7 +174,7 @@ try{
  }
  console.log('PASS: real backend + Postgres + object storage + kubelet + pinned CLIs, API-key and synthetic subscription Claude→Codex→Claude, both native model lists without supplied context-window metadata.');
 }catch(error){
- if(id){try{console.error('Pod status:',JSON.stringify(json('-n',ns,'get','pod','session-'+id).status));}catch{}try{console.error(kubectl('-n',ns,'logs','session-'+id,'-c','agent','--tail=100'));}catch{}try{console.error('Operation:',JSON.stringify(await api('sessions/'+id+'/provider-switch')));}catch{}}
+ if(id){try{console.error('Pod status:',JSON.stringify(json('-n',ns,'get','pod','session-'+id).status));}catch{}try{console.error(kubectl('-n',ns,'logs','session-'+id,'-c','agent','--tail=100'));}catch{}try{console.error('Operation:',JSON.stringify(await api('sessions/'+id+'/provider-switch')));}catch{}try{console.error('Model receipts:',kubectl('-n',ns,'exec','session-'+id,'-c','agent','--','node','-e',`fetch(${JSON.stringify(process.env.PROOF_MODEL_URL+'/proof/requests')}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))`));}catch{}}
  throw error;
 }finally{
  shell?.close();terminal?.close();watcher?.kill('SIGTERM');

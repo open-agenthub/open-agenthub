@@ -50,7 +50,7 @@ const handle = async (req, res) => {
   const supplied=req.headers['x-api-key']??String(req.headers.authorization??'').replace(/^Bearer /,'');
   const accepted = isMessages ? ['synthetic-claude-proof','synthetic-claude-subscription'] : ['synthetic-codex-proof','synthetic-codex-subscription'];
   if((isMessages || url.pathname.endsWith('/responses')) && !accepted.includes(supplied)){res.statusCode=401;return res.end('{}');}
-  records.push({sequence:++sequence,agent:isMessages?'claude':url.pathname.endsWith('/responses')?'codex':null,authMode:supplied.endsWith('-subscription')?'Subscription':supplied.endsWith('-proof')?'ApiKey':null,route:url.pathname,marker,containsQueued:messages.includes('QUEUED-AFTER-HANDOVER'),deniedTool:body.messages?.some(message=>Array.isArray(message.content)&&message.content.some(item=>item.type==='tool_result'&&item.tool_use_id==='toolu-proof-deny'&&item.is_error===true))??false,characters:messages.length});
+  records.push({sequence:++sequence,agent:isMessages?'claude':url.pathname.endsWith('/responses')?'codex':null,authMode:supplied.endsWith('-subscription')?'Subscription':supplied.endsWith('-proof')?'ApiKey':null,route:url.pathname,marker,containsQueued:messages.includes('QUEUED-AFTER-HANDOVER'),containsCancelled:messages.includes('CANCEL-QUEUED'),deniedTool:body.messages?.some(message=>Array.isArray(message.content)&&message.content.some(item=>item.type==='tool_result'&&item.tool_use_id==='toolu-proof-deny'&&item.is_error===true))??false,characters:messages.length});
   if(isMessages){
    if(url.pathname.includes('count_tokens')){res.setHeader('content-type','application/json');return res.end('{"input_tokens":10}');}
    const request=[...messages.matchAll(/Replacement request: ([0-9a-f-]{36})/g)].at(-1)?.[1];

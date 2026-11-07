@@ -18,6 +18,7 @@ const { Terminal } = require('@xterm/headless');
 const requests = [];
 const archives = [];
 let queuedAfterCancel = [];
+let releaseBusyModel, busyHeld = false;
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(fn) { for (let n = 0; n < 600; n++) { if (child && child.exitCode !== null) throw new Error('session server exited: ' + child.exitCode); try { const value = await fn(); if (value) return value; } catch {} await sleep(200); } throw new Error('capture timeout'); }
@@ -26,6 +27,9 @@ const model = http.createServer(async (req, res) => {
   const body = raw ? JSON.parse(raw) : {};
   const text = JSON.stringify(body.messages ?? body.input ?? []);
   requests.push({ route: req.url, text });
+  if(process.env.PROOF_CLAUDE_BUSY==='1'&&!busyHeld&&text.includes('CANCEL-QUEUED-native-claude')){
+    busyHeld=true;await new Promise(resolve=>{releaseBusyModel=resolve;});
+  }
   const marker = [...text.matchAll(/HISTORY-(?:claude|codex)-\d+/g)].at(-1)?.[0] ?? 'helper';
   const answer = 'Answer ' + marker;
   if (req.url.includes('/messages')) {
@@ -64,7 +68,9 @@ await listen(model); await listen(hub);
 const modelUrl = `http://127.0.0.1:${model.address().port}`;
 let child;
 try {
-  for (const agent of ['claude', 'codex']) {
+  const agents=(process.env.PROOF_AGENTS||'claude,codex').split(',');
+  assert(agents.length&&agents.every(agent=>['claude','codex'].includes(agent)));
+  for (const agent of agents) {
     const root = path.join(out, agent); const home = path.join(root, 'home'); const work = path.join(root, 'work');
     for (const dir of [work, path.join(home, '.claude'), path.join(home, '.codex'), path.join(root, 'tmp')]) fs.mkdirSync(dir, { recursive: true });
     const apiKey = 'synthetic-history-key';
@@ -177,6 +183,16 @@ try {
           assert.equal(pushed.status,200);
           assert.equal((await pushed.json()).delivered,'queued-for-mod');
           await until(async()=> (await transcript()).includes('CANCEL-QUEUED-native-claude'));
+          if(process.env.PROOF_CLAUDE_BUSY==='1'){
+            await until(()=>releaseBusyModel);
+            const busy=await fetch('http://127.0.0.1:18674/agenthub/messages',{method:'POST',headers:authority,body:JSON.stringify({id:'busy-mod',body:'BUSY-QUEUED-native-claude',priority:true,fromTitle:'Proof'})});
+            assert.equal((await busy.json()).delivered,'queued-for-mod');
+            releaseBusyModel();releaseBusyModel=null;
+            await until(()=>requests.some(item=>item.text.includes('BUSY-QUEUED-native-claude')));
+            const rows=(await transcript()).split('\n').filter(line=>line.includes('BUSY-QUEUED-native-claude')).map(line=>{const row=JSON.parse(line);return {type:row.type,isMeta:row.isMeta??false};});
+            fs.writeFileSync(path.join(root,'busy-delivery.json'),JSON.stringify({modelReceived:true,rows}));
+            console.log('claude: real busy-turn mod receipt reached model; persisted native row types '+JSON.stringify(rows));
+          }
         }
         const stopRequest = '33333333-3333-4333-8333-333333333333';
         await until(async () => (await fetch(route, { method: 'POST', headers: authority, body: JSON.stringify({ requestId: stopRequest, action: 'prepare' }) })).ok);
@@ -202,4 +218,4 @@ try {
     }
   }
   fs.writeFileSync(path.join(out, 'model-requests.json'), JSON.stringify(requests, null, 2));
-} finally { if (child) { try { process.kill(-child.pid, 'SIGTERM'); } catch {} } model.close(); hub.close(); }
+} finally { releaseBusyModel?.(); if (child) { try { process.kill(-child.pid, 'SIGTERM'); } catch {} } model.close(); hub.close(); }

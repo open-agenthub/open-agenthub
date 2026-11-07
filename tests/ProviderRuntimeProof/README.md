@@ -57,3 +57,10 @@ Codex input without a subsequent human turn. Add `PROOF_CLAUDE_MOD=1` to load a 
 of the shipped Claude mod against the local transport and verify acknowledged mod handback.
 The copy redirects only loopback ports. Nonessential-traffic suppression must be unset for
 that native mod, whose loopback HTTP uses the CLI's networking API.
+
+Set `PROOF_AGENTS=claude PROOF_CLAUDE_BUSY=1 PROOF_CLAUDE_MOD=1` with the source flags
+for a real busy-turn receipt. The recording model holds one native request while the shipped
+mod appends a second priority message. The proof releases the model, requires its next request
+to contain that message, and records native row metadata. The pinned CLI writes the appended
+user row with `isMeta: true`; the Workspace parser intentionally filters it. Model receipt,
+not visibility as an ordinary user row, proves that busy delivery reached native context.

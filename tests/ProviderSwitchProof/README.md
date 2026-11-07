@@ -57,3 +57,9 @@ checks the actual client formatter against a small discovery/list/watch fixture.
 tab writer expands JSONPath tabs into spaces; consumers must split whitespace, and establish
 the watch by observing the source before starting replacement. This formatter check is not
 a kubelet/deletion-order proof; the workflow verifies actual source/target lifecycle.
+
+Queued-message acceptance uses the recording model's request receipt, separated from the
+visible conversation checks. A busy Claude mod append is a native `isMeta` user row that
+Workspace intentionally hides. Requiring it to appear as an ordinary visible user entry
+would falsely report failed delivery. The reviewed first handover and earlier owner turns
+must still appear in the same visible history.
