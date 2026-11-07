@@ -1,4 +1,6 @@
 import http from 'node:http'
+import https from 'node:https'
+import { readFileSync } from 'node:fs'
 import { generateKeyPairSync, createHash, randomBytes, sign } from 'node:crypto'
 
 // A local public-client issuer exercises PKCE, offline scope and JWT validation without
@@ -15,7 +17,10 @@ const token = () => {
   const input = `${header}.${payload}`
   return `${input}.${sign('sha256', Buffer.from(input), privateKey).toString('base64url')}`
 }
-http.createServer(async (req, res) => {
+const server = process.env.PROOF_TLS_CERT
+  ? handler => https.createServer({ cert: readFileSync(process.env.PROOF_TLS_CERT), key: readFileSync(process.env.PROOF_TLS_KEY) }, handler)
+  : handler => http.createServer(handler)
+server(async (req, res) => {
   const url = new URL(req.url, issuer)
   res.setHeader('Access-Control-Allow-Origin', 'http://127.0.0.1:18080')
   res.setHeader('Content-Type', 'application/json')
