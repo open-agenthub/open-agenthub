@@ -34,7 +34,8 @@ export async function proveHeldRecovery({api,json,kubectl,openTerminal,openSourc
    const exec=script=>kubectl('-n',ns,'exec',podName,'-c','agent','--','/bin/sh','-ec',script);
    terminal=await openTerminal(id);
    await until(async()=>{const page=await api('sessions/'+id+'/conversation?offset=0&max=500');return page.entries.some(entry=>entry.text.includes('Answer SWITCH-PROOF-0'));},'held source native answer');
-   const first=pod(),owner=first.metadata.labels['agenthub.dev/owner'];
+   const first=await until(()=>{const value=pod();return value.status.phase==='Running'&&value.status.containerStatuses?.some(item=>item.name==='agent'&&item.ready)&&value;},'held source kubelet readiness');
+   const owner=first.metadata.labels['agenthub.dev/owner'];
    const claim=first.spec.volumes.find(volume=>volume.name==='workspace').persistentVolumeClaim.claimName;
    const claimUid=json('-n',ns,'get','pvc',claim).metadata.uid;
    exec("for name in first second; do printf 'held dirty content\\n' >> /workspace/$name/tracked.txt; printf 'held untracked content\\n' > /workspace/$name/untracked.txt; done");
