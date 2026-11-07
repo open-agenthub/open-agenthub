@@ -39,10 +39,15 @@ public static class SessionUpdateValidator
     {
         var agent = request.Agent ?? record.Agent;
         var authMode = request.AuthMode ?? record.AuthMode;
-        var stored = authMode == AgentAuthMode.CustomEndpoint;
+        var endpoint = authMode == AgentAuthMode.CustomEndpoint;
+        var wasEndpoint = record.AuthMode == AgentAuthMode.CustomEndpoint;
+        // A stored model id survives an update that keeps its meaning: the same endpoint setup, or
+        // the same agent on a provider account (switching between login and key keeps it). An
+        // endpoint's id is not a provider model, and one agent's id is no other agent's.
+        var keepModel = endpoint ? wasEndpoint : !wasEndpoint && agent == record.Agent;
         return AgentConfiguration.ValidateModelEndpoint(agent, authMode,
-            request.ModelEndpointUrl ?? (stored ? record.ModelEndpointUrl : null),
-            request.ModelName ?? (stored ? record.ModelName : null));
+            request.ModelEndpointUrl ?? (endpoint ? record.ModelEndpointUrl : null),
+            request.ModelName ?? (keepModel ? record.ModelName : null));
     }
 
     // The system prompt counts as a runtime field because a CronJob bakes it into its pod

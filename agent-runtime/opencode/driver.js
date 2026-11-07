@@ -137,6 +137,7 @@ function inputBox(rows) {
 }
 
 module.exports = {
+  modelCatalog: require('./model-catalog'),
   contextClearCommand: '/new',
   // /new redraws the welcome screen before creating a session. Waiting for its transcript
   // would deadlock the handover. Match the welcome composer's text and command footer:

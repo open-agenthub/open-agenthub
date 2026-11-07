@@ -232,6 +232,7 @@ function resetFromJson(match, text, { secondsFromNow }) {
 }
 
 module.exports = {
+  modelCatalog: require('./model-catalog'),
   failedTurnEnded: require('./turn-activity').failedTurnEnded,
   // /clear, not /new: both start a fresh thread and keep the old one resumable, but from 0.165.0
   // /new in a git checkout first asks "Where should the new conversation run?", and the

@@ -320,6 +320,9 @@ public static class AgentPodSpecFactory
             default:
                 throw new ArgumentException("Unsupported agent/authentication combination.");
         }
+        // The model a provider-account session starts on (#461); each runtime passes it to its CLI.
+        if (record.AuthMode != AgentAuthMode.CustomEndpoint && !string.IsNullOrEmpty(record.ModelName))
+            env.Add(new V1EnvVar { Name = "AGENTHUB_MODEL_NAME", Value = record.ModelName });
 
         if (hasMcp)
         {

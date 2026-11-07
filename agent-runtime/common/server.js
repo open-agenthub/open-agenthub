@@ -2,6 +2,7 @@
 const crypto = require('node:crypto');
 const { createWorkspaceDiff } = require('./workspace-diff');
 const { listSlashCommands } = require('./slash-commands');
+const { createModelCatalog } = require('./model-catalog');
 const { slimRecord } = require('./transcript-records');
 
 const { loadDriver, validateDriver } = require('./driver-contract');
@@ -195,6 +196,13 @@ function createCommonServer(options = {}) {
   const home = env.HOME || '/home/agent';
   const workdir = env.AGENTHUB_WORKDIR || (hasRepo ? '/workspace/repo' : '/workspace');
   const cwd = fs.existsSync(workdir) ? workdir : '/workspace';
+  // The account's models, asked from the CLI with the agent's own environment (#461,
+  // docs/design/model-discovery.md). agentEnv, not env: the key a driver moved out of the
+  // server's environment is exactly what the probe CLI needs to answer for this account.
+  const modelCatalog = supplied.modelCatalog || createModelCatalog({
+    driver, env: agentEnv, home, cwd: home, fs, fetch: fetchImpl, spawn: spawnProcess, now,
+    secretMask: text => { secretMask.refresh(); return secretMask.mask(text); } });
+
   const insecureStorage = env.AGENTHUB_S3_INSECURE === '1';
   const configuredFileMax = Number.parseInt(env.AGENTHUB_FILE_MAX_BYTES || '', 10);
   const fileMaxBytes = Number.isSafeInteger(configuredFileMax) && configuredFileMax > 0
@@ -2085,6 +2093,7 @@ function createCommonServer(options = {}) {
     const requestPath = (request.url || '').split('?')[0];
     if (requestPath === '/agenthub/diff') return handleDiffRequest(request, response);
     if (requestPath === '/agenthub/commands') return handleCommandsRequest(request, response);
+    if (requestPath === '/agenthub/models') return handleModelsRequest(request, response);
     if (requestPath === '/agenthub/attachments') return handleAttachmentRequest(request, response);
     if (requestPath === '/agenthub/runtime-drain') {
       if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
@@ -2152,6 +2161,34 @@ function createCommonServer(options = {}) {
     } catch {
       fileError(response, 503, 'commands_unavailable');
     }
+  }
+
+  // GET /agenthub/models[?refresh=1]: the hub's proxy for owners and collaborators. A refresh
+  // starts a second CLI process under the account, which is why only the hub's token may ask.
+  async function handleModelsRequest(request, response) {
+    response.setHeader('Cache-Control', 'no-store');
+    if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
+    if (request.method !== 'GET') {
+      response.setHeader('Allow', 'GET');
+      return fileError(response, 405, 'method_not_allowed');
+    }
+    const refresh = new URL(request.url, 'http://example.com').searchParams.get('refresh') === '1';
+    try { sendJson(response, 200, await modelCatalog.get({ refresh })); }
+    catch { fileError(response, 503, 'models_unavailable'); }
+  }
+
+  // One probe shortly after start, reported to the hub, so the new-session dialog knows this
+  // account's models before anyone opens a picker. Delayed past the CLI's own start, which reads
+  // and may refresh the same login files.
+  function pushModelCatalog() {
+    if (!callback || !token || !modelCatalog.supported() || env.AGENTHUB_MODEL_DISCOVERY === '0') return;
+    modelCatalog.get().then(catalog => fetchImpl(callback + '/models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Agent-Token': token },
+      body: JSON.stringify(catalog)
+    })).then(result => {
+      console.log('[agent] Models: ' + (result && result.ok ? 'reported' : 'report refused (' + (result && result.status) + ')'));
+    }).catch(error => console.log('[agent] Models: report failed (' + (error && error.message) + ')'));
   }
 
   /**
@@ -2444,9 +2481,12 @@ function createCommonServer(options = {}) {
   });
   httpServer.listen(port);
   console.log('[agent] Agent server listening on :' + port +
-    ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/git-credentials, /agenthub/messages, /agenthub/transcript, /agenthub/commands, /agenthub/attachments' +
+    ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/git-credentials, /agenthub/messages, /agenthub/transcript, /agenthub/commands, /agenthub/models, /agenthub/attachments' +
     (modToken ? ', /agenthub/mod/*' : '') + ')');
   postStatus('Running');
+  const modelDelay = Number.parseInt(env.AGENTHUB_MODEL_DISCOVERY_DELAY_MS || '', 10);
+  const modelTimer = setTimeoutImpl(pushModelCatalog, Number.isSafeInteger(modelDelay) && modelDelay >= 0 ? modelDelay : 45_000);
+  if (modelTimer && typeof modelTimer.unref === 'function') modelTimer.unref();
 
   for (const signal of ['SIGTERM', 'SIGINT']) {
     processLike.on(signal, () => {

@@ -46,6 +46,7 @@ public sealed class InternalController : ControllerBase
     private readonly ISessionContextClear? _contextClear;
     private readonly ISessionAccessService? _access;
     private readonly ISessionSharingService? _sharing;
+    private readonly ISessionModelCatalogs? _modelCatalogs;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
         PermissionStore permissions, IEnumerable<IPermissionNotifier> permNotifiers,
@@ -55,8 +56,10 @@ public sealed class InternalController : ControllerBase
         IUsageStore? usage = null, ISessionMessageStore? messages = null,
         ISessionMessageDelivery? delivery = null, IAccountFailover? accountFailover = null,
         IClaudeLoginSync? loginSync = null, ISecretRequestStore? secretRequests = null,
-        ISessionContextClear? contextClear = null, ISessionAccessService? access = null, ISessionSharingService? sharing = null)
+        ISessionContextClear? contextClear = null, ISessionAccessService? access = null, ISessionSharingService? sharing = null,
+        ISessionModelCatalogs? modelCatalogs = null)
     {
+        _modelCatalogs = modelCatalogs;
         _contextClear = contextClear;
         _access = access;
         _sharing = sharing;
@@ -240,6 +243,21 @@ public sealed class InternalController : ControllerBase
         var sample = new SessionResourceSample(body.CpuSeconds, body.MemoryBytes, body.RxBytes, body.TxBytes);
         if (!sample.IsValid) return BadRequest();
         await _usage.AddResourceSampleAsync(id, rec.Owner, sample, ct);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// The models the pod's CLI listed for the session's account, pushed once after start (#461,
+    /// docs/design/model-discovery.md). Filed under the account the session record says the pod
+    /// runs on, never one the pod names, and rebuilt from known fields before it is stored.
+    /// </summary>
+    [HttpPost("models")]
+    public async Task<IActionResult> ReportModels(string id, [FromBody] ModelCatalog body, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        if (_modelCatalogs is null) return NoContent();
+        await _modelCatalogs.RecordAsync(rec, ModelCatalogSanitizer.Clean(body), ct);
         return NoContent();
     }
 

@@ -24,9 +24,13 @@ function prepare(env) {
     delete env[modelEndpoint.KEY_ENV];
     return { childEnv };
   }
-  if (apiKey !== undefined) {
-    return { childEnv: { ANTHROPIC_API_KEY: apiKey } };
-  }
+  const childEnv = {};
+  if (apiKey !== undefined) childEnv.ANTHROPIC_API_KEY = apiKey;
+  // The model chosen at create (#461). The CLI reads it on every start, so a resumed conversation
+  // keeps it too; the CLI's own /model still switches within the session.
+  const model = String(env.AGENTHUB_MODEL_NAME || '').trim();
+  if (model) childEnv.ANTHROPIC_MODEL = model;
+  if (Object.keys(childEnv).length) return { childEnv };
 }
 
 function structuredPolicyList(env, name, label) {
@@ -227,6 +231,7 @@ function resetFromText(text, from) {
 }
 
 module.exports = {
+  modelCatalog: require('./model-catalog'),
   contextClearCommand: '/clear',
   turnHooks: true,
   // The pinned interactive CLI cancels a running turn on Escape without firing Stop.

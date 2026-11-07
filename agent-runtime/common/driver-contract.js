@@ -60,6 +60,11 @@ function validateDriver(driver) {
       (driver.slashCommands.sources !== undefined && typeof driver.slashCommands.sources !== 'function'))) {
     throw new Error('Agent driver slashCommands must be { builtins: [], sources?: function }');
   }
+  // Optional: { probe(ctx) } asking the pinned CLI for the account's models (#461,
+  // common/model-catalog.js). Without it only a custom endpoint is probed.
+  if (driver.modelCatalog !== undefined && (!driver.modelCatalog || typeof driver.modelCatalog.probe !== 'function')) {
+    throw new Error('Agent driver modelCatalog must be { probe: function }');
+  }
   // Optional hooks for swapping the provider login of a running session; a driver without them
   // gets the common behaviour (file under HOME/<stateDir>/<authFilename>, JSON-object check).
   for (const key of ['credentialPath', 'validCredential', 'installCredential']) {

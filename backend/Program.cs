@@ -154,6 +154,8 @@ builder.Services.AddTransient<ISessionMessageDelivery, SessionMessageDelivery>()
 builder.Services.AddTransient<ISessionContextClear, SessionContextClear>();
 builder.Services.AddTransient<IWorkspaceDiffReader, WorkspaceDiffReader>();
 builder.Services.AddTransient<ISessionCommandsReader, SessionCommandsReader>();
+builder.Services.AddSingleton<AgentHub.Api.Persistence.IModelCatalogStore, AgentHub.Api.Persistence.PostgresModelCatalogStore>();
+builder.Services.AddTransient<ISessionModelCatalogs, SessionModelCatalogs>();
 builder.Services.AddTransient<ISessionTerminalAttachments, SessionTerminalAttachments>();
 // A singleton, unlike the services above: it holds each followed session's offset and entries.
 builder.Services.AddSingleton<ILiveTranscriptReader>(sp => new LiveTranscriptReader(
@@ -547,6 +549,7 @@ await AgentHub.Api.Persistence.SchemaMigrationLock.RunAsync(app.Configuration, a
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Browser.IBrowserLeaseStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IProjectStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.PostgresSessionOrderStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IModelCatalogStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.IMcpServerStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.IEphemeralApiMcpStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.ISkillStore>().InitializeAsync();
