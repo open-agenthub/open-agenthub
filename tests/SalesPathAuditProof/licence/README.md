@@ -1,7 +1,7 @@
 # Licence path, end to end without payment (#480)
 
 Proves grant → activation → heartbeat renewal → offline behaviour → expiry with the real
-licence service and the real backend (1.18.0), locally, without Stripe, docker, Kubernetes or
+licence service and the real backend (1.18.0), locally, without the payment provider, docker, Kubernetes or
 any owner key. The licence service is a private repository: these scripts only run a checkout
 of it you already have; nothing of its source is copied here.
 
@@ -24,7 +24,7 @@ throwaway build:
 
 | Script | What it does |
 |---|---|
-| `start-license-service.sh` | Licence service on `127.0.0.1:18500`, SQLite, throwaway ES256 key and admin key, no Stripe key. `TOKEN_LIFETIME_DAYS` overrides the 45-day token lifetime (whole days only). |
+| `start-license-service.sh` | Licence service on `127.0.0.1:18500`, SQLite, throwaway ES256 key and admin key, no payment-provider key. `TOKEN_LIFETIME_DAYS` overrides the 45-day token lifetime (whole days only). |
 | `start-backend.sh` | The rebuilt backend on `127.0.0.1:18090` with API-key login, a local Postgres, `Ee:License:ServiceUrl` at the local service. A private `HOME` with a kubeconfig pointing at `127.0.0.1:1` satisfies the start-up check without a cluster. `REPORT_HOURS=1` keeps the first heartbeat (30 s after start) and the next one an hour later. |
 | `sign-token.py` | Signs a token in the service's format with the throwaway key and a validity in **seconds**, to watch expiry happen; the service itself only issues whole days. |
 

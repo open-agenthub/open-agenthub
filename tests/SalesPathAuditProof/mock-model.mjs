@@ -21,9 +21,10 @@ http.createServer((req, res) => {
     const last = msgs[msgs.length - 1] || {}
     const lastText = JSON.stringify(last.content || '')
     const hasToolResult = Array.isArray(last.content) && last.content.some(b => b.type === 'tool_result')
-    const isTask = lastText.includes('AUDIT-TASK')
+    // The CLI may append a context message after the user's prompt, so look at the whole turn.
+    const isTask = JSON.stringify(msgs).includes('AUDIT-TASK')
     n++
-    console.log(JSON.stringify({ at: new Date().toISOString(), n, url: req.url, stream: !!body.stream, tools: (body.tools || []).length, isTask, hasToolResult, auth: req.headers['x-api-key'] ? 'x-api-key' : req.headers.authorization ? 'bearer' : 'none' }))
+    console.log(JSON.stringify({ at: new Date().toISOString(), n, url: req.url, stream: !!body.stream, tools: (body.tools || []).length, isTask, hasToolResult, auth: req.headers['x-api-key'] ? 'x-api-key' : req.headers.authorization ? 'bearer' : 'none', toolNames: (body.tools || []).map(t => t.name), msgs: msgs.length, lastText: lastText.slice(-400) }))
     let content
     if (isTask && !hasToolResult) content = [{ type: 'tool_use', id: 'toolu_audit' + n, name: 'Bash', input: { command: TASK_SCRIPT, description: 'Make the README change, push a branch, open a PR', timeout: 600000 } }]
     else if (hasToolResult) {

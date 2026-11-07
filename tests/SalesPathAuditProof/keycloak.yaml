@@ -1,0 +1,55 @@
+# Local identity-provider stand-in for the ICP setup (a team with its own OIDC IdP). Keycloak in
+# dev mode with one realm: a public PKCE client "agenthub" whose access tokens carry aud=agenthub,
+# and two users (with offline_access: the hub always asks for a refresh token), alice (admin, session owner) and bob (the colleague who takes over).
+# The issuer must be the same URL for the browser and the backend, so it is a name, not a Service
+# address: kc.example.test:18081 resolves to the port-forward on the host and, through the CoreDNS
+# override in this file, to the Service inside the cluster.
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: realm, namespace: audit }
+data:
+  realm.json: |
+    {"realm":"team","enabled":true,"sslRequired":"none",
+     "clients":[{"clientId":"agenthub","publicClient":true,"standardFlowEnabled":true,
+       "directAccessGrantsEnabled":true,
+       "redirectUris":["http://localhost:8080/*"],"webOrigins":["http://localhost:8080"],
+       "attributes":{"pkce.code.challenge.method":"S256","post.logout.redirect.uris":"http://localhost:8080/*"},
+       "protocolMappers":[{"name":"aud","protocol":"openid-connect","protocolMapper":"oidc-audience-mapper",
+         "config":{"included.client.audience":"agenthub","access.token.claim":"true","id.token.claim":"false"}}]}],
+     "users":[
+       {"username":"alice","email":"alice@example.com","firstName":"Alice","lastName":"Owner","enabled":true,"emailVerified":true,"realmRoles":["offline_access"],
+        "credentials":[{"type":"password","value":"alice-audit-pw","temporary":false}]},
+       {"username":"bob","email":"bob@example.com","firstName":"Bob","lastName":"Reviewer","enabled":true,"emailVerified":true,"realmRoles":["offline_access"],
+        "credentials":[{"type":"password","value":"bob-audit-pw","temporary":false}]}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: keycloak, namespace: audit }
+spec:
+  selector: { matchLabels: { app: keycloak } }
+  template:
+    metadata: { labels: { app: keycloak } }
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:26.0.7
+          args: [start-dev, --import-realm, --http-port=18081, --hostname=http://kc.example.test:18081]
+          env:
+            - { name: KC_BOOTSTRAP_ADMIN_USERNAME, value: admin }
+            - { name: KC_BOOTSTRAP_ADMIN_PASSWORD, value: audit-only-admin }
+          ports: [{ containerPort: 18081 }]
+          volumeMounts: [{ name: realm, mountPath: /opt/keycloak/data/import }]
+      volumes: [{ name: realm, configMap: { name: realm } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: keycloak, namespace: audit }
+spec: { selector: { app: keycloak }, ports: [{ port: 18081, targetPort: 18081 }] }
+---
+# k3s CoreDNS reads *.override snippets from this ConfigMap.
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: coredns-custom, namespace: kube-system }
+data:
+  kc.override: |
+    rewrite name kc.example.test keycloak.audit.svc.cluster.local

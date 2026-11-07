@@ -15,11 +15,13 @@ spec:
     spec:
       containers:
         - name: gitd
-          image: docker.io/alpine/git:2.47.2
+          image: docker.io/library/alpine:3.20
           command: [sh, -c]
           args:
             - |
               set -e
+              # alpine/git ships without git-daemon; the distribution package has it.
+              apk add -q --no-cache git git-daemon
               git config --global user.email audit@example.com; git config --global user.name audit
               git config --global init.defaultBranch main
               mkdir -p /srv && git init -q --bare /srv/demo.git

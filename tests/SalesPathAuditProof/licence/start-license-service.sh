@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Starts a checkout of the (private) licence service locally with SQLite, a throwaway ES256
-# key and a throwaway admin key. No Stripe key: checkout/portal are out of scope, grant,
+# key and a throwaway admin key. No payment-provider key: checkout/portal are out of scope, grant,
 # claim, token and heartbeat need none.
 #   LS_SRC=<license-service checkout> RIG=<scratch dir> ./start-license-service.sh
 set -euo pipefail
