@@ -48,8 +48,7 @@ public sealed class ApiTokenStore
             CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
             ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS allowed_credentials TEXT;
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(ApiTokenStore), ddl, ct);
     }
 
     /// <summary>SHA-256 hex of the full token — the only representation we persist.</summary>

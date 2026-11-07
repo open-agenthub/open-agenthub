@@ -56,8 +56,7 @@ public sealed class UserDirectory : AgentHub.Api.Usage.IPersonalUsageLimitSource
             -- Self-set monthly API budget in USD (community feature); NULL = no limit.
             ALTER TABLE app_users ADD COLUMN IF NOT EXISTS usage_limit_usd DOUBLE PRECISION;
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(UserDirectory), ddl, ct);
     }
 
     public async Task<IReadOnlyList<AppUser>> FindShareRecipientsAsync(string caller, string query,

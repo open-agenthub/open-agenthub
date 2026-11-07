@@ -38,8 +38,7 @@ public sealed class AllowedAgentsStore
                 agent TEXT PRIMARY KEY
             );
             """;
-        await using var cmd = _db!.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db!, nameof(AllowedAgentsStore), ddl, ct);
     }
 
     public async Task<IReadOnlyList<AgentKind>> ListAsync(CancellationToken ct = default)

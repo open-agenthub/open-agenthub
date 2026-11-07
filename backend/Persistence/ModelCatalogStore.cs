@@ -23,7 +23,7 @@ public sealed class PostgresModelCatalogStore(IConfiguration configuration) : IM
     // point is that the list outlives the session that found it.
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        await using var command = _db.CreateCommand("""
+        await SchemaScript.ApplyAsync(_db, nameof(PostgresModelCatalogStore), """
             CREATE TABLE IF NOT EXISTS model_catalogs (
                 owner TEXT NOT NULL,
                 agent TEXT NOT NULL,
@@ -34,8 +34,7 @@ public sealed class PostgresModelCatalogStore(IConfiguration configuration) : IM
                 fetched_at TIMESTAMPTZ NOT NULL,
                 PRIMARY KEY (owner, agent, auth_mode, account, endpoint)
             );
-            """);
-        await command.ExecuteNonQueryAsync(ct);
+            """, ct);
     }
 
     public async Task<StoredModelCatalog?> GetAsync(ModelCatalogKey key, CancellationToken ct = default)

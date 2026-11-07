@@ -42,8 +42,7 @@ public sealed class PortGrantStore : IPortGrantStore
                 PRIMARY KEY (session_id, direction, port, protocol)
             );
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(PortGrantStore), ddl, ct);
     }
 
     public async Task AddAsync(string sessionId, PortDirection direction, int port, string protocol, CancellationToken ct = default)

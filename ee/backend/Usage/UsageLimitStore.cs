@@ -41,8 +41,7 @@ public sealed class UsageLimitStore
                 PRIMARY KEY (scope, target)
             );
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(UsageLimitStore), ddl, ct);
     }
 
     public async Task<IReadOnlyList<AdminUsageLimit>> ListAsync(CancellationToken ct = default)

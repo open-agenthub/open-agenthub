@@ -19,6 +19,7 @@ public class SessionMetadataDeletionPostgresTests
         await threads.InitializeAsync();
         foreach (var table in Tables)
             await db.ExecuteAsync($"ALTER TABLE {table} DROP CONSTRAINT {table}_session_fk");
+        await ForgetAppliedScriptsAsync(db);
         await db.AddSessionAsync("owner", "live");
         await SeedAsync(db, "live");
         await SeedAsync(db, "gone");
@@ -47,6 +48,7 @@ public class SessionMetadataDeletionPostgresTests
         await new SlackThreadStore(db.Configuration).InitializeAsync();
         foreach (var table in Tables)
             await db.ExecuteAsync($"ALTER TABLE {table} DROP CONSTRAINT {table}_session_fk");
+        await ForgetAppliedScriptsAsync(db);
         await SeedAsync(db, "gone");
         await db.ExecuteAsync("""
             CREATE FUNCTION refuse_prune() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -75,6 +77,7 @@ public class SessionMetadataDeletionPostgresTests
         await threads.InitializeAsync();
         foreach (var table in Tables)
             await db.ExecuteAsync($"ALTER TABLE {table} DROP CONSTRAINT {table}_session_fk");
+        await ForgetAppliedScriptsAsync(db);
         await SeedAsync(db, "gone");
         await Task.WhenAll(db.Shares.InitializeAsync(), db.Shares.InitializeAsync(),
             threads.InitializeAsync(), threads.InitializeAsync()).WaitAsync(TimeSpan.FromSeconds(15));
@@ -152,6 +155,10 @@ public class SessionMetadataDeletionPostgresTests
         await new ChatBindingStore(db.Configuration).InitializeAsync();
         return db;
     }
+
+    // A database from before the constraints has no record of applied scripts either; without
+    // this, the stores would see their current scripts recorded and skip the migration.
+    internal static Task ForgetAppliedScriptsAsync(PostgresSharingDatabase db) => db.ExecuteAsync("DELETE FROM schema_scripts");
 
     internal static Task SeedAsync(PostgresSharingDatabase db, string id) => db.ExecuteAsync("""
         INSERT INTO session_shares (session_id, recipient_owner, role) VALUES (@id, 'recipient', 'Viewer');

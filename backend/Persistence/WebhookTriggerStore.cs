@@ -55,8 +55,7 @@ public sealed class PostgresWebhookTriggerStore : IWebhookTriggerStore
             );
             CREATE INDEX IF NOT EXISTS idx_webhook_triggers_owner ON webhook_triggers(owner);
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(PostgresWebhookTriggerStore), ddl, ct);
     }
 
     private const string Columns =

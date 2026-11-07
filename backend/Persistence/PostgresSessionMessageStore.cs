@@ -95,8 +95,8 @@ public sealed class PostgresSessionMessageStore : ISessionMessageStore
                 created_at TIMESTAMPTZ NOT NULL
             );
             """;
-        await using var cmd = _db.CreateCommand(ddl + "ALTER TABLE cross_owner_message_audit ALTER COLUMN sender_session_id DROP NOT NULL;");
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(PostgresSessionMessageStore),
+            ddl + "ALTER TABLE cross_owner_message_audit ALTER COLUMN sender_session_id DROP NOT NULL;", ct);
     }
 
     public async Task AddAsync(SessionMessageRecord m, CancellationToken ct = default)

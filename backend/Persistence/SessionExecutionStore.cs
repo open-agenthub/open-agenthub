@@ -39,7 +39,7 @@ public sealed class PostgresSessionExecutionStore(IConfiguration configuration) 
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        await using var command = _db.CreateCommand("""
+        await SchemaScript.ApplyAsync(_db, nameof(PostgresSessionExecutionStore), """
             CREATE TABLE IF NOT EXISTS session_executions (
                 session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
                 generation BIGINT NOT NULL CHECK (generation >= 0),
@@ -63,8 +63,7 @@ public sealed class PostgresSessionExecutionStore(IConfiguration configuration) 
                 PRIMARY KEY(session_id, generation, ordinal),
                 FOREIGN KEY(session_id, generation) REFERENCES session_executions(session_id, generation) ON DELETE CASCADE
             );
-            """);
-        await command.ExecuteNonQueryAsync(ct);
+            """, ct);
     }
 
     public async Task<SessionExecution?> EnsureLegacyAsync(string owner, string id, CancellationToken ct = default)
