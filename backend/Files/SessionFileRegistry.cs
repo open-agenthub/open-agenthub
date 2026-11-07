@@ -165,8 +165,7 @@ public sealed class PostgresSessionFileRegistry : ISessionFileRegistry
                 FOR EACH ROW EXECUTE FUNCTION agenthub_notify_session_files();
             """;
 
-        await using var command = _db.CreateCommand(ddl);
-        await command.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(PostgresSessionFileRegistry), ddl, ct);
     }
 
     public async Task InsertStreamTicketAsync(

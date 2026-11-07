@@ -62,8 +62,7 @@ public sealed class PermissionStore
                 PRIMARY KEY (session_id, tool)
             );
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(PermissionStore), ddl, ct);
     }
 
     public async Task CreateAsync(PermissionRequest r, CancellationToken ct = default)

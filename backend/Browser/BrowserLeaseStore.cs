@@ -37,8 +37,7 @@ public sealed class PostgresBrowserLeaseStore(IConfiguration configuration) : IB
             );
             CREATE INDEX IF NOT EXISTS idx_browser_leases_lease_id ON browser_leases(lease_id);
             """;
-        await using var command = _db.CreateCommand(sql);
-        await command.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(PostgresBrowserLeaseStore), sql, ct);
     }
 
     public async Task<bool> TryCreateAsync(BrowserLease lease, CancellationToken ct = default)

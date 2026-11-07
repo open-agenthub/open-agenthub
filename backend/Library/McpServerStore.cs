@@ -45,8 +45,7 @@ public sealed class McpServerStore : IMcpServerStore
             CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_servers_owner_name
                 ON mcp_servers (owner, lower(name));
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(McpServerStore), ddl, ct);
     }
 
     public async Task<McpServerRecord> CreateAsync(

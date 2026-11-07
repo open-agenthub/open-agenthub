@@ -11,14 +11,13 @@ public sealed class PostgresKeyRepository(IConfiguration configuration) : IXmlRe
 
     public async Task InitializeAsync()
     {
-        await using var command = _db.CreateCommand("""
+        await SchemaScript.ApplyAsync(_db, nameof(PostgresKeyRepository), """
             CREATE TABLE IF NOT EXISTS data_protection_keys (
                 id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                 friendly_name TEXT NOT NULL,
                 xml TEXT NOT NULL
             )
-            """);
-        await command.ExecuteNonQueryAsync();
+            """, CancellationToken.None);
     }
 
     public IReadOnlyCollection<XElement> GetAllElements()

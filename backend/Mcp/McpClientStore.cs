@@ -50,8 +50,7 @@ public sealed class McpClientStore
                 PRIMARY KEY (client_id, owner)
             );
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(McpClientStore), ddl, ct);
     }
 
     public async Task AddAsync(string clientId, string displayName, IReadOnlyList<string> redirectUris,

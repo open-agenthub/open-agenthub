@@ -69,8 +69,7 @@ public sealed class PostgresSecretRequestStore(IConfiguration cfg) : ISecretRequ
             CREATE INDEX IF NOT EXISTS idx_secret_requests_owner ON secret_requests(owner, status);
             CREATE INDEX IF NOT EXISTS idx_secret_requests_session ON secret_requests(session_id);
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(PostgresSecretRequestStore), ddl, ct);
     }
 
     public async Task CreateAsync(SecretRequest r, CancellationToken ct = default)

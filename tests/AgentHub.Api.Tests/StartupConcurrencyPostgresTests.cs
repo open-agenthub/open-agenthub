@@ -38,9 +38,11 @@ public sealed class StartupConcurrencyPostgresTests
     {
         await using var db = await Schema.CreateAsync();
         await StartTogetherAsync(db, replicas: 1);
-        // Back to what 1.7.0 left: no session foreign keys, no deleted-session markers, and metadata
-        // of sessions that were deleted. #367/#368 prune those rows and add the constraints.
+        // Back to what 1.7.0 left: no session foreign keys, no deleted-session markers, no record of
+        // applied schema scripts, and metadata of sessions that were deleted. #367/#368 prune those
+        // rows and add the constraints.
         await db.ExecAsync("""
+            DROP TABLE schema_scripts;
             ALTER TABLE session_shares DROP CONSTRAINT session_shares_session_fk;
             ALTER TABLE session_share_links DROP CONSTRAINT session_share_links_session_fk;
             ALTER TABLE session_mcp_policies DROP CONSTRAINT session_mcp_policies_session_fk;

@@ -40,15 +40,14 @@ public sealed class SingleUserOwnerStore(IConfiguration cfg) : ISingleUserOwnerS
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        await using var cmd = _db.CreateCommand("""
+        await SchemaScript.ApplyAsync(_db, nameof(SingleUserOwnerStore), """
             CREATE TABLE IF NOT EXISTS single_user_owners (
                 owner     TEXT NOT NULL,
                 mode      TEXT NOT NULL,
                 last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
             );
             CREATE UNIQUE INDEX IF NOT EXISTS single_user_owners_owner_key ON single_user_owners (lower(owner));
-            """);
-        await cmd.ExecuteNonQueryAsync(ct);
+            """, ct);
     }
 
     public async Task RecordAsync(string owner, string mode, CancellationToken ct = default)

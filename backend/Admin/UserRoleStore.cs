@@ -75,8 +75,7 @@ public sealed class UserRoleStore : IUserRoleStore
             );
             CREATE INDEX IF NOT EXISTS idx_role_audit_at ON role_audit (at DESC);
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(UserRoleStore), ddl, ct);
     }
 
     public async Task<string?> GetRoleAsync(string owner, CancellationToken ct = default)

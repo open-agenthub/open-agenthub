@@ -50,8 +50,7 @@ public sealed class PostgresSessionTransferTicketStore(IConfiguration cfg) : ISe
             );
             CREATE INDEX IF NOT EXISTS idx_session_transfer_tickets_expiry ON session_transfer_tickets(expires_at);
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(PostgresSessionTransferTicketStore), ddl, ct);
     }
 
     public async Task<string> MintAsync(SessionTransferTicket ticket, CancellationToken ct = default)

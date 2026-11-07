@@ -18,15 +18,14 @@ public sealed class PostgresSessionWorkspaceStore(IConfiguration configuration) 
     private readonly NpgsqlDataSource _db = PostgresDataSources.Shared(configuration);
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        await using var command = _db.CreateCommand("""
+        await SchemaScript.ApplyAsync(_db, nameof(PostgresSessionWorkspaceStore), """
             CREATE TABLE IF NOT EXISTS session_workspaces (
                 session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
                 claim_name TEXT NOT NULL UNIQUE, claim_uid TEXT,
                 size TEXT NOT NULL, storage_class TEXT, nonce TEXT NOT NULL,
                 repositories TEXT NOT NULL
             )
-            """);
-        await command.ExecuteNonQueryAsync(ct);
+            """, ct);
     }
     public async Task<SessionWorkspace?> GetAsync(string owner, string id, CancellationToken ct = default)
     {

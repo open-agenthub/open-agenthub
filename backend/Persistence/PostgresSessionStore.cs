@@ -261,8 +261,7 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS question_open BOOLEAN NOT NULL DEFAULT FALSE;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS question_title TEXT;
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(PostgresSessionStore), ddl, ct);
     }
 
     public async Task UpsertAsync(SessionRecord r, CancellationToken ct = default)

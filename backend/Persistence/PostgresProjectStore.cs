@@ -38,8 +38,7 @@ public sealed class PostgresProjectStore : IProjectStore
             CREATE UNIQUE INDEX IF NOT EXISTS uq_projects_owner_name ON projects(owner, lower(name));
             ALTER TABLE projects ADD COLUMN IF NOT EXISTS secret_ids TEXT;
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(PostgresProjectStore), ddl, ct);
     }
 
     public async Task<IReadOnlyList<ProjectInfo>> ListAsync(string owner, CancellationToken ct = default)

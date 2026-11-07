@@ -107,8 +107,7 @@ public sealed class SkillStore : ISkillStore
                 PRIMARY KEY (skill_id, version, path)
             );
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(SkillStore), ddl, ct);
     }
 
     public async Task<SkillRecord> CreateAsync(
