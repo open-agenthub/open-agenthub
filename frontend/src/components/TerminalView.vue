@@ -29,6 +29,8 @@ import { permissionTitle } from '../lib/permissions.js'
 import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
 import { preferredUi } from '../lib/ui-preference.js'
 import SecretRequestBanner from './SecretRequestBanner.vue'
+import SessionModelSwitch from './workspace/SessionModelSwitch.vue'
+import { busyReason } from '../lib/model-switch.js'
 
 const props = defineProps({ session: Object, sharedToken: { type: String, default: null }, initialUi: { type: String, default: null } })
 const runtimeUpdateError = ref('')
@@ -358,6 +360,9 @@ const pendingAccount = computed(() =>
   accountList.value.find(a => a.id === pendingAccountId.value && a.id !== currentAccountId.value) || null)
 const accountBusy = ref(false)
 const accountNote = ref('')
+// What the Workspace already knows would make the session agent refuse a live model switch (#478).
+const modelSwitchBusy = computed(() => busyReason(workspaceActivity.value,
+  { pendingPermissions: pendingPermissions.value.length, menuOpen: !!cliMenu.value }))
 const showAccountSwitch = computed(() => !props.sharedToken && capabilities.value.canManage
   && props.session?.phase === 'Running' && props.session?.authMode === 'Subscription' && accountList.value.length >= 2)
 
@@ -599,6 +604,7 @@ function interruptWorkspaceAgent() {
             :data-account-exhausted="isAccountExhausted(a) ? 'true' : null">{{ accountOptionLabel(a) }}{{ isAccountExhausted(a) ? ` (${accountLimitLabel(a)})` : '' }}</option>
         </select>
       </label>
+      <SessionModelSwitch v-if="!sharedToken" :session="session" :busy="modelSwitchBusy" @switched="emit('runtime-updated')" />
       <button class="bar-btn" data-open-files @click="workspace?.openFiles()">Files</button>
       <button v-if="browserRunning" class="bar-btn" data-open-browser @click="workspace?.openBrowser()">Browser</button>
       <nav class="tabs">

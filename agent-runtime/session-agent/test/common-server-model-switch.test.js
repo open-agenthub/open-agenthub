@@ -158,3 +158,28 @@ test('a second switch while one waits for its confirmation is refused', async ()
   harness.terminals[0].emitData(release());
   assert.equal((await first).status, 200);
 });
+
+test('a submitted line, a cleared box, keys and dialog answers leave no draft behind', async () => {
+  const { FakeSocket } = require('./common-server-harness');
+  for (const keys of [['half a sentence', '\r'], ['\x1b[200~/compact\x1b[201~', '\r'], ['some text', '\x15'], ['\x1b[A', '\x1b']]) {
+    // The fake terminal sees the person's keys too; the command is what follows them.
+    const { harness } = switchHarness(codex, {
+      answer: line => line.includes('/model gpt-6-luna') ? '\r\n• Model changed to gpt-6-luna medium\r\n' : null
+    });
+    const socket = new FakeSocket();
+    harness.runtime.webSocketServer.connect(socket, '/');
+    for (const data of keys) socket.emit('message', Buffer.from(JSON.stringify({ type: 'input', data })));
+
+    const response = await post(harness, { model: 'gpt-6-luna' });
+    assert.equal(response.status, 200, JSON.stringify(keys) + ' ' + response.body);
+  }
+  // Typed while a question waits for its answer: that is the answer, not a draft. The turn the
+  // answer continues still blocks until it ends.
+  const { harness } = switchHarness(codex, { answer: () => '\r\n• Model changed to gpt-6-luna medium\r\n' });
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/');
+  await turn(harness, 'question');
+  socket.emit('message', Buffer.from(JSON.stringify({ type: 'input', data: 'my answer' })));
+  await turn(harness, 'stop');
+  assert.equal((await post(harness, { model: 'gpt-6-luna' })).status, 200);
+});

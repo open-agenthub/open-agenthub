@@ -189,7 +189,7 @@ function createNextTurnDelivery(options) {
     return null;
   }
 
-  function idleReason(term, screenSize, { unknownIsIdle = false } = {}) {
+  function idleReason(term, screenSize, { unknownIsIdle = false, ignoreDraft = false } = {}) {
     if (!term) return 'no_terminal';
     // A handover saved by an earlier run waits for the restarted CLI, which reports no turn until
     // someone types: 'unknown' with quiet output is a CLI waiting at its prompt (#336).
@@ -197,7 +197,10 @@ function createNextTurnDelivery(options) {
     if (state !== 'idle' && !startAction) return 'turn_' + state;
     // Keys since the last submitted prompt may be a draft in the prompt box — typed during the
     // turn as well as after it — and a message typed now would be appended to it and sent.
-    if (lastPersonInput > 0 && lastPersonInput >= lastPrompt) return 'person_typed';
+    // An action that checked for a draft itself (a model switch, which tracks the prompt box more
+    // narrowly) is not held back by keys that left none.
+    const draftChecked = ignoreDraft || (actions.length > 0 && actions[0].ignoreDraft);
+    if (!draftChecked && lastPersonInput > 0 && lastPersonInput >= lastPrompt) return 'person_typed';
     if (typing) return 'typing';
     if (now() - lastOutput < IDLE_QUIET_MS) return 'output';
     return screenSize ? null : 'no_screen';
@@ -348,7 +351,7 @@ function createNextTurnDelivery(options) {
     /** A plain message the hub will hear "next-turn" for. */
     accept() { pending = true; },
     turnEvent,
-    scheduleAtSafePoint(action, { atStart = false } = {}) { actions.push({ action, atStart }); },
+    scheduleAtSafePoint(action, { atStart = false, ignoreDraft = false } = {}) { actions.push({ action, atStart, ignoreDraft }); },
     async waitForInputReady(term, scrollback, screenSize, isReady = () => true) {
       const deadline = now() + 15_000;
       while (now() < deadline) {
@@ -366,9 +369,9 @@ function createNextTurnDelivery(options) {
      * the typed paths use, with a CLI that has reported no turn since it started counted as
      * waiting at its prompt, which is what it does until someone types.
      */
-    inputBlocker(term, screenSize) {
+    inputBlocker(term, screenSize, { ignoreDraft = false } = {}) {
       if (busyTaking) return 'typing';
-      return idleReason(term, screenSize, { unknownIsIdle: true });
+      return idleReason(term, screenSize, { unknownIsIdle: true, ignoreDraft });
     },
     typeMessage,
     typeHandover,

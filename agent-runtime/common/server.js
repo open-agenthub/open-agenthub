@@ -12,7 +12,7 @@ const { LocalFileStore, LocalFileError } = require('../files/local-store');
 const { AttachmentMaterializer } = require('../files/materialize');
 const credentials = require('./credential-install');
 const { injectTerminalInput, formatFleetMessage, INTERRUPT_PAUSE_MS, ESCAPE } = require('./terminal-inject');
-const { createNextTurnDelivery, renderScreen, IDLE_QUIET_MS } = require('./next-turn');
+const { createNextTurnDelivery, renderScreen, isTerminalReply, IDLE_QUIET_MS } = require('./next-turn');
 // How long a typed handover may take to appear in the CLI's transcript. Both CLIs write the
 // user turn when it is submitted, before the model answers.
 const HANDOVER_VERIFY_MS = 10_000;
@@ -305,6 +305,22 @@ function createCommonServer(options = {}) {
   // for the confirmation.
   let modelSwitching = false;
   const outputTaps = new Set();
+  // Whether the person left text in the CLI's prompt box that was not submitted (#478). A typed
+  // command would be appended to it and sent as one line. Narrower than the fleet path's "keys
+  // since the last prompt": answering a question or approval, moving through a menu and sending a
+  // slash command from the composer (which no prompt hook reports) leave no draft behind, and
+  // counting them blocked the switch until the next message. Enter submits what is in the box,
+  // Ctrl+C and Ctrl+U empty it.
+  let promptDraft = false;
+  function trackPromptDraft(data) {
+    if (typeof data !== 'string' || isTerminalReply(data)) return;
+    if (/[\r\n\x03\x15]$/.test(data)) { promptDraft = false; return; }
+    if (activityWaitingFor) return;
+    const text = data.replace(/\x1b\[20[01]~/g, '');
+    // An escape sequence is a key (arrows, Escape, function keys), not text in the box.
+    if (text.startsWith('\x1b')) return;
+    if (/[^\x00-\x1f\x7f]/.test(text)) promptDraft = true;
+  }
   // The handover of a context clear not yet seen in the fresh transcript (#336). Inside the state
   // directory, so the archive carries it to a pod that replaces this one.
   const handoverFile = require('node:path').join(home, driver.stateDir, 'agenthub-context-handover.json');
@@ -1471,6 +1487,7 @@ function createCommonServer(options = {}) {
           activityWaitingFor = null;
           publishActivity();
         }
+        trackPromptDraft(message.data);
         if (nextTurn) {
           nextTurn.personInput(message.data);
           if (nextTurn.isTyping()) {
@@ -1912,6 +1929,7 @@ function createCommonServer(options = {}) {
     // continuation. Keep that distinction instead of turning its idle report into a Stop.
     if (event === 'prompt') {
       activityPromptAt = now();
+      promptDraft = false;
       // Complete before the prompt hook returns so a later question cannot be cleared by a
       // delayed callback from the previous prompt. Failure must not prevent the native turn.
       if (callback && token) {
@@ -1970,9 +1988,9 @@ function createCommonServer(options = {}) {
     if (activityWaitingFor === 'answer' || (typeof hubDialogTitle === 'string')) return 'question_open';
     if (contextClear && (contextClear.pending || contextClear.executing)) return 'context_clear_pending';
     const size = lastSize || { cols: 120, rows: 32 };
+    if (promptDraft) return 'draft_in_prompt';
     if (nextTurn) {
-      const reason = nextTurn.inputBlocker(term, size);
-      if (reason === 'person_typed') return 'draft_in_prompt';
+      const reason = nextTurn.inputBlocker(term, size, { ignoreDraft: true });
       if (reason === 'typing') return 'message_typing';
       if (reason) return 'turn_running';
     } else if (now() - activityLastOutput < IDLE_QUIET_MS) {
@@ -2029,7 +2047,7 @@ function createCommonServer(options = {}) {
         try { resolve(await work()); } catch (error) { reject(error); }
         // No turn was started: the scheduler goes back to idle.
         return false;
-      }, { atStart: nextTurn.state === 'unknown' });
+      }, { atStart: nextTurn.state === 'unknown', ignoreDraft: true });
       deliverNextTurnIfIdle();
     });
   }
