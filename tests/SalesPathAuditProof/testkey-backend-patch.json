@@ -1,0 +1,3 @@
+{"spec":{"template":{"spec":{
+  "volumes":[{"name":"testkey-backend","hostPath":{"path":"/opt/testkey-backend","type":"Directory"}}],
+  "containers":[{"name":"backend","volumeMounts":[{"name":"testkey-backend","mountPath":"/app","readOnly":true}]}]}}}}
