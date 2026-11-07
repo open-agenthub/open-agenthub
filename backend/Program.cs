@@ -529,6 +529,21 @@ builder.Services.AddCors(c => c.AddDefaultPolicy(p =>
 
 var app = builder.Build();
 
+if (authEnabled)
+{
+    try
+    {
+        await OidcStartupValidation.ValidateAsync(app.Services);
+    }
+    catch (HubAuthConfigurationException e)
+    {
+        Console.Error.WriteLine($"FATAL: {e.Message}");
+        await app.DisposeAsync();
+        return 1;
+    }
+}
+
+
 // Every start, not once: the log is where an operator notices an install that was left open.
 if (hubAuth.Mode == AgentHub.Api.Auth.HubAuthMode.InsecureDev)
     app.Logger.LogWarning("INSECURE DEVELOPMENT MODE (Auth:InsecureDevMode=true): there is no login. Every request is "

@@ -285,6 +285,8 @@ oidc:
   audience: agenthub
   clientId: agenthub
   scope: openid profile email
+  # Backend startup fetches discovery and signing keys; only isolated HTTP tests should
+  # disable HTTPS metadata. Browser access and TLS trust must work independently.
   requireHttpsMetadata: true
 
 # Login for installs without OIDC (oidc.authority empty), docs/no-oidc-api-key.md. The backend
