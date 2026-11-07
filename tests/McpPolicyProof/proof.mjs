@@ -98,7 +98,8 @@ async function scenario(label, autoApprove) {
     check(/Blocked by the session MCP sharing policy/.test(result(name)) && !ran,
       `${label}: ${what}, called as ${name}, denied and never reached the server`, result(name))
   }
-  const tools = asked.map(a => a.tool)
+  // ToolSearch is an ordinary built-in tool and asks like one in an interactive session.
+  const tools = asked.map(a => a.tool).filter(t => t.startsWith('mcp__'))
   const blockedAsked = tools.filter(t => t !== 'mcp__docs__read')
   check(blockedAsked.length === 0 && (autoApprove ? tools.length === 0 : tools.length === 1),
     `${label}: no approval for a blocked tool; ${autoApprove ? 'none at all (auto-approve)' : 'the allowed tool asked the owner'}`, JSON.stringify(tools))
