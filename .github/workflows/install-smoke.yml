@@ -21,6 +21,10 @@ on:
         description: "Prove session storage egress isolation under real NetworkPolicy"
         type: boolean
         default: false
+      prove_backend_private_ca:
+        description: "Prove backend TLS trust with a private-CA issuer"
+        type: boolean
+        default: false
       installer_ref:
         description: "Website revision to test (empty uses the published installer)"
         type: string
@@ -150,6 +154,11 @@ jobs:
         env:
           KUBECONFIG: /etc/rancher/k3s/k3s.yaml
         run: bash tests/OidcStartupProof/install.sh
+      - name: Prove private CA backend trust
+        if: github.event_name == 'workflow_dispatch' && inputs.prove_backend_private_ca
+        env:
+          KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        run: bash tests/OidcStartupProof/private-ca.sh
       # A chart upgrade must move every image with the chart's appVersion (#491); the old
       # "latest" default left a release on whatever its nodes had pulled first.
       - name: Upgrade to a newer chart moves the images

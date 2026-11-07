@@ -19,3 +19,13 @@ reaches the real Admin API. Finally the script restores the original API-key qui
 This test-only HTTP setup does not prove public TLS ingress or an external provider's UI.
 The stand-in uses the protocol/claims expected from a compatible identity broker; it is
 not a verification of every provider's own client configuration.
+
+## Private CA
+
+Dispatch Quickstart install on the branch with `prove_backend_private_ca=true`.
+`private-ca.sh` generates a one-day local root and an issuer certificate with the node
+IP as SAN. The real checkout backend must fail OIDC startup without the root, then
+become ready with `backend.trustedCaConfigMap`. PKCE, refresh and a real authenticated
+admin request prove discovery and signing-key TLS retrieval. The ConfigMap is in the
+release namespace; no host trust store is modified. The previous release is restored.
+Generated keys and logs stay in a temporary directory and are never committed.
