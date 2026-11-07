@@ -52,6 +52,64 @@ public class AdminAccessTests
         private sealed class NoLock : IAsyncDisposable { public ValueTask DisposeAsync() => ValueTask.CompletedTask; }
     }
 
+    internal sealed class InMemorySingleUserOwnerStore(params string[] owners) : ISingleUserOwnerStore
+    {
+        public HashSet<string> Owners { get; } = new(owners, StringComparer.OrdinalIgnoreCase);
+        public Task RecordAsync(string owner, string mode, CancellationToken ct = default)
+        { Owners.Add(owner); return Task.CompletedTask; }
+        public Task<IReadOnlyCollection<string>> ListOwnersAsync(CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyCollection<string>>(Owners.ToList());
+        public Task<IReadOnlyList<SingleUserOwnerData>> ListWithDataAsync(CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<SingleUserOwnerData>>([]);
+    }
+
+    private static AdminAccess BuildOidc(string? admins, IUserRoleStore? roles, ISingleUserOwnerStore owners,
+        params IAdminRoleProvider[] providers)
+    {
+        var cfg = new ConfigurationBuilder()
+            .AddInMemoryCollection(new[] { new KeyValuePair<string, string?>("Ee:Admins", admins) })
+            .Build();
+        return new AdminAccess(cfg, NullLogger<AdminAccess>.Instance, providers, roles, singleUserOwners: owners);
+    }
+
+    [Fact]
+    public async Task ApiKeyOwnerName_DoesNotBecomeAdmin_ThroughARoleOrGroup_UnderOidc()
+    {
+        // The identity-provider user who signs in as "admin" after a switch from the API key must
+        // not inherit admin rights from a role row or an admin group (#492).
+        var roles = new InMemoryUserRoleStore();
+        await roles.SetRoleAsync("admin", "admin");
+        var groups = new FakeRoleProvider { HasMappings = true };
+        groups.Admins.Add("admin");
+        groups.Admins.Add("dora");
+        var a = BuildOidc("", roles, new InMemorySingleUserOwnerStore("admin", "dev"), groups);
+
+        var resolved = await a.ResolveAsync("admin");
+        Assert.False(resolved.IsAdmin);
+        Assert.Equal(RoleSources.SingleUserOwner, resolved.Source);
+        Assert.False(await a.IsAdminAsync("ADMIN"));
+        Assert.False(await a.IsAdminAsync("dev"));
+        Assert.True(await a.IsAdminAsync("dora"));       // groups still work for everyone else
+    }
+
+    [Fact]
+    public async Task ApiKeyOwnerName_RoleRowAlone_DoesNotCountAsADesignatedAdmin()
+    {
+        var roles = new InMemoryUserRoleStore();
+        await roles.SetRoleAsync("keyholder", "admin");
+        var a = BuildOidc("", roles, new InMemorySingleUserOwnerStore("keyholder"));
+        Assert.False(await a.IsAdminDesignatedAsync());
+        Assert.False(await a.KeepsAnAdminAsync(["keyholder"]));
+    }
+
+    [Fact]
+    public async Task ApiKeyOwnerName_IsAdmin_OnlyWhenListedInEeAdmins()
+    {
+        var a = BuildOidc("admin", new InMemoryUserRoleStore(), new InMemorySingleUserOwnerStore("admin"));
+        Assert.Equal(RoleSources.Values, (await a.ResolveAsync("admin")).Source);
+        Assert.False(await a.IsSingleUserOwnerAsync("admin"));
+    }
+
     private static AdminAccess Build(string? admins, params IAdminRoleProvider[] providers)
         => Build(admins, null, providers);
 

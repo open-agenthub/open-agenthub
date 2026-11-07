@@ -22,10 +22,16 @@ public sealed class AdminController : ControllerBase
     private readonly LicenseStore _store;
     private readonly UserDirectory _dir;
     private readonly IConfiguration _cfg;
+    private readonly AgentHub.Api.Auth.HubAuthOptions? _hubAuth;
+    private readonly ISingleUserOwnerStore? _singleUserOwners;
 
     public AdminController(AdminAccess access, IEnterpriseLicense license, LicenseStore store,
-        UserDirectory dir, IConfiguration cfg)
-    { _access = access; _license = license; _store = store; _dir = dir; _cfg = cfg; }
+        UserDirectory dir, IConfiguration cfg, AgentHub.Api.Auth.HubAuthOptions? hubAuth = null,
+        ISingleUserOwnerStore? singleUserOwners = null)
+    {
+        _access = access; _license = license; _store = store; _dir = dir; _cfg = cfg;
+        _hubAuth = hubAuth; _singleUserOwners = singleUserOwners;
+    }
 
     private string Owner =>
         User.FindFirstValue("preferred_username") ?? User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "dev";
@@ -37,12 +43,21 @@ public sealed class AdminController : ControllerBase
     // browser, since a static key carries no profile the way an OIDC token does.
     // adminDesignated is answered to every signed-in user, not only admins: while it is false
     // nobody is an admin, so the only people who can see the notice are the ones who are not.
-    public async Task<object> Access(CancellationToken ct) => new
+    public async Task<object> Access(CancellationToken ct)
     {
-        isAdmin = await IsAdminAsync(ct),
-        user = Owner,
-        adminDesignated = await _access.IsAdminDesignatedAsync(ct)
-    };
+        var isAdmin = await IsAdminAsync(ct);
+        return new
+        {
+            isAdmin,
+            user = Owner,
+            adminDesignated = await _access.IsAdminDesignatedAsync(ct),
+            // Admins only, and only under OIDC: in API-key mode the key owner is the one user, and
+            // the counts say nothing a non-admin needs.
+            singleUserOwnerData = isAdmin && _hubAuth?.Mode == AgentHub.Api.Auth.HubAuthMode.Oidc && _singleUserOwners is not null
+                ? await _singleUserOwners.ListWithDataAsync(ct)
+                : []
+        };
+    }
 
     public sealed record SeatInfo(int Used, int Included);
     public sealed record Overview(

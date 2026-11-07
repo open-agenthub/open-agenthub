@@ -57,26 +57,50 @@ bootstrap" as a special case: demoting the last admin simply leaves none, and is
 
 ## Switching from the API key to OIDC
 
-Ownership is by username. The API key acts as `auth.apiKey.owner` (default `admin`), and the
-sessions, credentials and projects created with it belong to that name. After the switch:
+Ownership is by username. The API key acts as `auth.apiKey.owner` (default `admin`; `dev` on
+installs upgraded from the open mode), and the sessions, credentials and projects created with it
+belong to that name. After a switch to OIDC they belong to whichever identity-provider user signs
+in with the same username — on a provider with self-registration, whoever registers it first.
 
-- **Admin rights**: the key owner is no longer an admin by mode; set `ee.admins` to your OIDC
-  username.
-- **Seat**: the key owner keeps its row in *Users & seats* with a seat, which still counts. Revoke
-  it there once the data is no longer needed.
-- **Sessions and data**: they stay under the key owner's name, visible only to a user with that
-  `preferred_username`. If your IdP username is the same as the key owner, you keep everything.
-  Otherwise finish or export what you need before switching.
+What the hub does about it:
 
-Rewriting owner columns on a mode switch was rejected for the same reason as on the API-key
-upgrade (`docs/no-oidc-api-key.md`): it would touch many tables during a configuration change,
-a partial run would split one person's data across two names, and the backend cannot know which
-OIDC user the key holder becomes.
+- **No admin rights by name.** The names an install used without OIDC are *single-user owners*:
+  the API-key owner and the development user, recorded in `single_user_owners` on every start in
+  those modes, the name the chart carries forward under OIDC (`Auth__FormerApiKeyOwner`, from
+  `auth.apiKey.owner`, the old ConfigMap or the key Secret), and the chart defaults `admin` and
+  `dev`. Under OIDC such a name is an admin only through `Ee:Admins`. A per-user admin role or an
+  admin group does not count for it, and promoting it in the admin area answers 409. An admin row
+  left over for such a name does not count as a designated admin either.
+- **A notice while it holds data.** When a single-user owner owns sessions or projects, admins see
+  "Data from API-key mode is under the name X (n sessions, m projects). It is visible to the
+  identity-provider user with the same username." and the backend logs the same warning at
+  startup.
+- **Seat.** The key owner keeps its row in *Users & seats* with a seat; revoke it there.
+
+What the operator does, before switching: either pick a key owner name nobody can register at the
+provider (`auth.apiKey.owner`, ideally from the start), or move or delete the data. A tool that
+hands the data to a chosen OIDC user is a separate issue.
+
+Rejected alternatives:
+
+- **Rewrite owner columns on the switch** (as for the API-key upgrade, `docs/no-oidc-api-key.md`):
+  it touches many tables during a configuration change, a partial run splits one person's data
+  across two names, and the backend cannot know which OIDC user the key holder becomes.
+- **Hide the old owner's data from every OIDC user.** Safer for the data, but it would also lock
+  out the legitimate case — the key holder whose provider username is the same — with no way back
+  short of SQL.
+- **Only the recorded name, without the defaults `admin` and `dev`.** Installs that switched before
+  the record existed would not be covered. The cost of including the defaults is that a provider
+  user named `admin` or `dev` can be an admin only through `Ee:Admins`.
 
 ## Tests
 
-`AdminAccessTests`: no designation means no admin (`NoDesignation_NobodyIsAdmin`), a configured
+`AdminAccessTests`: the API-key owner name gets no admin from a role or group under OIDC, and only
+`Ee:Admins` makes it one; no designation means no admin (`NoDesignation_NobodyIsAdmin`), a configured
 admin is one, an admin group mapping and a per-user admin role still grant it, and the last-admin
 check refuses demoting the only admin. `HubAuthTests`: the key owner and the dev user are admins
-without `Ee:Admins`. `AdminRolesPostgresTests` drives the real controllers on Postgres. In the
+without `Ee:Admins`. `AdminRolesPostgresTests` drives the real controllers and `SingleUserOwnerStore` on Postgres,
+including the 409 for promoting the old owner name. `tests/helm/api-key-values.ps1` checks
+`Auth__FormerApiKeyOwner`. `tests/AdminBootstrapProof/` runs the real backend through a switch from
+the API key to OIDC. In the
 frontend, `app-navigation.test.js` covers the notice.

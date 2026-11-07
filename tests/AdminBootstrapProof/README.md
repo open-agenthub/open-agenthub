@@ -33,5 +33,10 @@ Scenarios:
    database): bob stays admin, alice and a new user are users, and bob cannot demote himself as the
    last admin (409).
 
+5. **Branch, API-key mode** with owner `keyholder`: the key creates a project.
+6. **Branch, switched to OIDC**, `Ee:Admins=bob`: the startup log warns that data is under
+   `keyholder`; bob's `/api/admin/access` lists `{owner: keyholder, sessions: 0, projects: 1}`; the
+   provider user `keyholder` is not admin and sees no counts; bob promoting `keyholder` gets 409.
+
 Group mappings are Enterprise and licence-gated; they are covered by `AdminRolesPostgresTests`
 against the real stores, not here.

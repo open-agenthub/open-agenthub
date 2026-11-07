@@ -29,6 +29,12 @@ public static class RoleSources
     public const string User = "user";
     /// <summary>From an OIDC group mapped to a role (Enterprise Edition).</summary>
     public const string Group = "group";
+    /// <summary>
+    /// The name an install used without OIDC (API-key owner, development user). Under OIDC only
+    /// <c>Ee:Admins</c> can make it an admin: a per-user role or group would otherwise hand the
+    /// old owner's admin rights to whoever registers that username at the identity provider.
+    /// </summary>
+    public const string SingleUserOwner = "single-user-owner";
     /// <summary>Nothing applies: a regular user.</summary>
     public const string Default = "default";
 }
@@ -57,16 +63,18 @@ public sealed class AdminAccess
     private readonly HashSet<string> _admins;
     private readonly IEnumerable<IAdminRoleProvider> _roleProviders;
     private readonly IUserRoleStore? _userRoles;
+    private readonly ISingleUserOwnerStore? _singleUserOwners;
 
     /// <summary>The <c>Ee:Admins</c> entries, for display as break-glass accounts.</summary>
     public IReadOnlyCollection<string> ValuesAdmins => _admins;
 
     public AdminAccess(IConfiguration cfg, ILogger<AdminAccess> log,
         IEnumerable<IAdminRoleProvider> roleProviders, IUserRoleStore? userRoles = null,
-        AgentHub.Api.Auth.HubAuthOptions? hubAuth = null)
+        AgentHub.Api.Auth.HubAuthOptions? hubAuth = null, ISingleUserOwnerStore? singleUserOwners = null)
     {
         _roleProviders = roleProviders;
         _userRoles = userRoles;
+        _singleUserOwners = singleUserOwners;
         var raw = cfg["Ee:Admins"] ?? "";
         _admins = raw.Split(new[] { ',', ';', ' ', '\n', '\t' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                      .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -91,11 +99,26 @@ public sealed class AdminAccess
     public async Task<bool> IsAdminDesignatedAsync(CancellationToken ct = default)
     {
         if (_admins.Count > 0) return true;
-        if (_userRoles is not null && await _userRoles.AnyAdminAsync(ct)) return true;
+        if (_userRoles is not null && await _userRoles.AnyAdminAsync(ct))
+        {
+            // An admin row for a single-user owner does not count: ResolveAsync ignores it.
+            var reserved = await SingleUserOwnersAsync(ct);
+            foreach (var (owner, role) in await _userRoles.ListRolesAsync(ct))
+                if (role == UserRoleStore.AdminRole && !reserved.Contains(owner)) return true;
+        }
         foreach (var provider in _roleProviders)
             if (await provider.HasAdminMappingsAsync(ct)) return true;
         return false;
     }
+
+    /// <summary>True when the owner is a name an install used without OIDC (see <see cref="RoleSources.SingleUserOwner"/>).</summary>
+    public async Task<bool> IsSingleUserOwnerAsync(string owner, CancellationToken ct = default)
+        => !IsValuesAdmin(owner) && (await SingleUserOwnersAsync(ct)).Contains(owner);
+
+    private async Task<HashSet<string>> SingleUserOwnersAsync(CancellationToken ct)
+        => _singleUserOwners is null
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(await _singleUserOwners.ListOwnersAsync(ct), StringComparer.OrdinalIgnoreCase);
 
     public async Task<bool> IsAdminAsync(string? owner, CancellationToken ct = default)
         => !string.IsNullOrEmpty(owner) && (await ResolveAsync(owner, ct)).IsAdmin;
@@ -114,6 +137,10 @@ public sealed class AdminAccess
     public async Task<RoleResolution> ResolveAsync(string owner, string? explicitRole, CancellationToken ct = default)
     {
         if (IsValuesAdmin(owner)) return new(UserRoleStore.AdminRole, RoleSources.Values, []);
+        // Checked before the per-user role and groups: an admin row left from an earlier mode, or
+        // an admin group the new identity-provider user happens to be in, must not make the
+        // holder of the old owner's name an admin. Ee:Admins above is the deliberate way.
+        if (await IsSingleUserOwnerAsync(owner, ct)) return new(UserRoleStore.UserRole, RoleSources.SingleUserOwner, []);
         if (explicitRole is not null) return new(explicitRole, RoleSources.User, []);
 
         GroupRole? userGroups = null;

@@ -12,6 +12,8 @@ const [branchDll, baselineDll] = process.argv.slice(2)
 if (!branchDll) { console.error('usage: node proof.mjs <branch dll> [baseline dll]'); process.exit(2) }
 const ISSUER = 'http://127.0.0.1:9492'
 const API = 'http://127.0.0.1:8492'
+// Generated per run and never printed: the API-key scenario only needs some valid key.
+const API_KEY = crypto.randomBytes(24).toString('hex')
 const DB = process.env.PROOF_DB || 'Host=127.0.0.1;Port=54329;Username=postgres;Database=proof492'
 
 // --- A minimal OIDC issuer: discovery and JWKS, tokens signed with a key that exists only here.
@@ -53,16 +55,18 @@ const dpCert = path.join(kubeDir, 'dp-cert.pem'), dpKey = path.join(kubeDir, 'dp
 execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=proof492',
   '-keyout', dpKey, '-out', dpCert], { stdio: 'ignore' })
 
-function start(dll, admins, log) {
+function start(dll, admins, log, mode = 'oidc') {
   const env = { ...process.env, ASPNETCORE_ENVIRONMENT: 'Production', ASPNETCORE_URLS: API,
     HOME: kubeDir, KUBECONFIG: path.join(kubeDir, '.kube', 'config'),
-    Oidc__Authority: ISSUER, Oidc__RequireHttpsMetadata: 'false',
+    ...(mode === 'oidc' ? { Oidc__Authority: ISSUER, Oidc__RequireHttpsMetadata: 'false' }
+      : { Auth__ApiKey: API_KEY, Auth__ApiKeyOwner: 'keyholder' }),
     ConnectionStrings__Postgres: DB, Ee__Admins: admins,
     AgentHub__Namespace: 'agenthub-sessions', AgentHub__CallbackBaseUrl: API,
     AgentHub__ClaudeAgentImage: 'registry.example.com/agent-claude:proof',
     AgentHub__AgentImage: 'registry.example.com/agent:proof', Browser__Enabled: 'false',
     DataProtection__CertificatePem: fs.readFileSync(dpCert, 'utf8'), DataProtection__PrivateKeyPem: fs.readFileSync(dpKey, 'utf8') }
-  for (const k of ['Auth__ApiKey', 'Auth__InsecureDevMode']) delete env[k]
+  for (const k of ['Auth__InsecureDevMode', ...(mode === 'oidc' ? ['Auth__ApiKey', 'Auth__ApiKeyOwner'] : ['Oidc__Authority'])])
+    delete env[k]
   const out = fs.openSync(log, 'w')
   return spawn(process.env.DOTNET || 'dotnet', [dll], { env, stdio: ['ignore', out, out] })
 }
@@ -92,10 +96,11 @@ let failed = 0
 const check = (name, ok, detail) => { console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`); if (!ok) failed++ }
 const logDir = process.env.PROOF_LOG_DIR || kubeDir
 
-async function scenario(label, dll, admins, steps) {
-  console.log(`\n== ${label} (Ee:Admins="${admins}")`)
-  const child = start(dll, admins, path.join(logDir, `${label.replace(/\W+/g, '-')}.log`))
-  try { await healthy(child); await steps() } finally { await stop(child) }
+async function scenario(label, dll, admins, steps, mode = 'oidc') {
+  console.log(`\n== ${label} (${mode}, Ee:Admins="${admins}")`)
+  const log = path.join(logDir, `${label.replace(/\W+/g, '-')}.log`)
+  const child = start(dll, admins, log, mode)
+  try { await healthy(child); await steps(log) } finally { await stop(child) }
 }
 
 if (baselineDll) {
@@ -142,6 +147,32 @@ await scenario('branch, existing install: ee.admins removed, bob kept in the dat
   check('a new user is not admin', carol.json?.isAdmin === false)
   const demote = await call('bob', 'PUT', '/api/admin/users/bob/role', { role: 'user' })
   check('bob cannot demote the last admin (himself)', demote.status === 409, `status ${demote.status}`)
+})
+
+// Switch from the API key to OIDC (#492): the key acted as "keyholder" and created a project.
+await scenario('branch, API-key mode as keyholder', branchDll, '', async () => {
+  const res = await fetch(`${API}/api/projects`, { method: 'POST',
+    headers: { authorization: `Bearer ${API_KEY}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'made with the key' }) })
+  check('the key holder creates a project', res.ok, `status ${res.status}`)
+}, 'apiKey')
+
+await scenario('branch, switched to OIDC, bob designated', branchDll, 'bob', async log => {
+  const warned = fs.readFileSync(log, 'utf8').includes('Data from API-key mode is under the name keyholder (0 session(s), 1 project(s))')
+  check('startup log warns about data under the old key owner name', warned)
+  const admin = await call('bob', 'GET', '/api/admin/access')
+  console.log(`  bob /api/admin/access: ${JSON.stringify(admin.json)}`)
+  check('the admin is told which name holds API-key data',
+    JSON.stringify(admin.json?.singleUserOwnerData) === JSON.stringify([{ owner: 'keyholder', sessions: 0, projects: 1 }]))
+  const holder = await call('keyholder', 'GET', '/api/admin/access')
+  console.log(`  keyholder (IdP user) /api/admin/access: ${JSON.stringify(holder.json)}`)
+  check('the IdP user with the old owner name is not admin and gets no data counts',
+    holder.json?.isAdmin === false && holder.json?.singleUserOwnerData?.length === 0)
+  const promote = await call('bob', 'PUT', '/api/admin/users/keyholder/role', { role: 'admin' })
+  check('promoting the old owner name in the admin area is refused', promote.status === 409,
+    `status ${promote.status}: ${promote.json?.error}`)
+  const after = await call('keyholder', 'GET', '/api/admin/access')
+  check('it stays a regular user', after.json?.isAdmin === false)
 })
 
 issuer.close()

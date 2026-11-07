@@ -206,6 +206,10 @@ builder.Services.AddSingleton<AgentHub.Api.Licensing.IEnterpriseLicense, AgentHu
 builder.Services.AddSingleton<AgentHub.Api.Admin.UserRoleStore>();
 builder.Services.AddSingleton<AgentHub.Api.Admin.IUserRoleStore>(sp =>
     sp.GetRequiredService<AgentHub.Api.Admin.UserRoleStore>());
+// Owner names from API-key and development mode, which OIDC users must not inherit admin rights by.
+builder.Services.AddSingleton<AgentHub.Api.Admin.SingleUserOwnerStore>();
+builder.Services.AddSingleton<AgentHub.Api.Admin.ISingleUserOwnerStore>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Admin.SingleUserOwnerStore>());
 builder.Services.AddSingleton<AgentHub.Api.Admin.AdminAccess>();
 // Enterprise: user groups from OAuth token claims, group→role mapping and admin usage limits.
 // Registered unconditionally — every provider self-gates on the license at call time.
@@ -573,12 +577,28 @@ await AgentHub.Api.Persistence.SchemaMigrationLock.RunAsync(app.Configuration, a
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISecretRequestStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Network.IPortGrantStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Admin.UserRoleStore>().InitializeAsync();
+        var singleUserOwners = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Admin.SingleUserOwnerStore>();
+        await singleUserOwners.InitializeAsync();
+        // Recorded on every start in these modes, because after a switch to OIDC the configuration
+        // no longer says which name the key acted as, and its data is still there under it.
+        if (hubAuth.Mode == AgentHub.Api.Auth.HubAuthMode.ApiKey)
+            await singleUserOwners.RecordAsync(hubAuth.ApiKeyOwner, "apiKey");
+        else if (hubAuth.Mode == AgentHub.Api.Auth.HubAuthMode.InsecureDev)
+            await singleUserOwners.RecordAsync(AgentHub.Api.Auth.HubAuthOptions.InsecureDevUser, "insecureDev");
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Identity.UserGroupStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Usage.UsageLimitStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Agents.AllowedAgentsStore>().InitializeAsync();
         // License token lives in the DB — create its table, then load & verify it.
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Licensing.ILicenseStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Licensing.IEnterpriseLicense>().ReloadAsync();
+    }
+
+    if (hubAuth.Mode == AgentHub.Api.Auth.HubAuthMode.Oidc)
+    {
+        foreach (var data in await app.Services.GetRequiredService<AgentHub.Api.Admin.SingleUserOwnerStore>().ListWithDataAsync())
+            app.Logger.LogWarning("Data from API-key mode is under the name {Owner} ({Sessions} session(s), {Projects} project(s)). "
+                + "It is visible to the identity-provider user with the same username. Check it before that name can sign in; "
+                + "see docs/admin-bootstrap.md.", data.Owner, data.Sessions, data.Projects);
     }
 
     await LegacySecretMigration.RunAsync(app.Services, app.Configuration, app.Environment, app.Logger);

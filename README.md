@@ -191,7 +191,8 @@ storage can be skipped with `AGENTHUB_OBJECT_STORAGE=0` — not recommended.
    With OIDC nobody is an administrator until one is named in `ee.admins` (the
    `preferred_username`); more can be made admins in the admin area later
    ([docs/admin-bootstrap.md](docs/admin-bootstrap.md)). Data created with the API key stays with
-   its owner (default `admin`); see that file before switching.
+   its owner (default `admin`) and becomes visible to the identity-provider user with that
+   username; choose a unique `auth.apiKey.owner`, or move or delete that data, before switching.
 4. **Store your credentials** (Settings → Credentials): SSH key or GitLab/GitHub token
    for repo access, plus an Anthropic, OpenAI, Cursor, or OpenCode API key if using API-key billing.
    OpenClaw ApiKey mode reuses those existing keys (pick Anthropic, OpenAI, or Cursor as the

@@ -56,6 +56,11 @@ public sealed class AdminRolesController : ControllerBase
         if (_access.IsValuesAdmin(owner))
             return Conflict(new { error = $"{owner} is listed in Ee:Admins (Helm values) and stays an admin; remove them there to change this." });
 
+        if (req.Role == UserRoleStore.AdminRole && await _access.IsSingleUserOwnerAsync(owner, ct))
+            return Conflict(new { error = $"{owner} is the name data from API-key or development mode belongs to. "
+                + "Under OIDC it becomes an admin only through Ee:Admins (Helm ee.admins), so that whoever registers this "
+                + "username at the identity provider does not inherit admin rights." });
+
         var known = await _dir.ListAsync(ct);
         var target = known.FirstOrDefault(u => string.Equals(u.Owner, owner, StringComparison.OrdinalIgnoreCase));
         if (target is null) return NotFound(new { error = $"No user {owner} has signed in yet." });

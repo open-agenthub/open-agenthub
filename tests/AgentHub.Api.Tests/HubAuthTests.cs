@@ -323,4 +323,14 @@ public class HubAuthTests
             hubAuth: HubAuthOptions.Resolve(Config(("Auth:InsecureDevMode", "true"))));
         Assert.True(await dev.IsAdminAsync(HubAuthOptions.InsecureDevUser));
     }
+
+    [Fact]
+    public async Task The_key_holder_stays_admin_in_API_key_mode_although_its_name_is_recorded()
+    {
+        // The single-user-owner rule is for the name after a switch to OIDC, not for the key itself.
+        var access = new AdminAccess(Config(), NullLogger<AdminAccess>.Instance, [],
+            hubAuth: HubAuthOptions.ForApiKey(Key, "admin"),
+            singleUserOwners: new AdminAccessTests.InMemorySingleUserOwnerStore("admin"));
+        Assert.True(await access.IsAdminAsync("admin"));
+    }
 }

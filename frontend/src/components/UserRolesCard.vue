@@ -35,6 +35,7 @@ function sourceText(u) {
     case 'values': return 'Ee:Admins in the Helm values — cannot be changed here'
     case 'user': return 'set here'
     case 'group': return `group ${u.groups.join(', ')}`
+    case 'single-user-owner': return 'owner name from API-key mode — admin only through Ee:Admins'
     default: return 'default'
   }
 }
