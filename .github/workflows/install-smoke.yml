@@ -154,6 +154,11 @@ jobs:
         env:
           KUBECONFIG: /etc/rancher/k3s/k3s.yaml
         run: bash tests/OidcStartupProof/install.sh
+      - name: Prepare private CA proof client SDK
+        if: github.event_name == 'workflow_dispatch' && inputs.prove_backend_private_ca
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.402
       - name: Prove private CA backend trust
         if: github.event_name == 'workflow_dispatch' && inputs.prove_backend_private_ca
         env:
