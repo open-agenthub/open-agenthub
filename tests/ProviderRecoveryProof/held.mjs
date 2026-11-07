@@ -33,7 +33,7 @@ export async function proveHeldRecovery({api,json,kubectl,openTerminal,openSourc
    const pod=()=>json('-n',ns,'get','pod',podName);
    const exec=script=>kubectl('-n',ns,'exec',podName,'-c','agent','--','/bin/sh','-ec',script);
    const starting=await api('sessions/'+id+'/provider-switch');assert.equal(starting.available,false);assert.match(starting.reason,/still starting/);
-   await denied(id,'/preview',{requestId:crypto.randomUUID(),target:{agent:target,authMode:'ApiKey',credentialId:null,modelEndpointUrl:null,modelName:null},handover:{target,task:'Check startup readiness'}},/still starting/);
+   await denied(id,'/preview',{requestId:crypto.randomUUID(),target:{agent:target,authMode:'ApiKey',credentialId:null,modelEndpointUrl:null,modelName:null},handover:{target,instructions:'Preserve the workspace and restrictions.',task:'Check startup readiness'}},/still starting/);
    terminal=await openTerminal(id);
    await until(async()=>{const page=await api('sessions/'+id+'/conversation?offset=0&max=500');return page.entries.some(entry=>entry.text.includes('Answer SWITCH-PROOF-0'));},'held source native answer');
    const first=await until(()=>{const value=pod();return value.status.phase==='Running'&&value.status.containerStatuses?.some(item=>item.name==='agent'&&item.ready)&&value;},'held source kubelet readiness');
