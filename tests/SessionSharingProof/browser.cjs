@@ -49,7 +49,7 @@ async function api(path, user='alice', method='GET', body) {
  await page.getByRole('button',{name:'Add',exact:true}).click();
  await page.locator('.person .pname').filter({hasText:'bob'}).waitFor();
  check(await page.locator('.person .pname').filter({hasText:'bob'}).isVisible(), 'owner shares using selected username');
- await page.getByRole('button',{name:'Create link',exact:true}).click();
+ await page.locator('[data-create-link]').click();
  await page.locator('.one-time code').waitFor();
  check((await page.locator('.one-time code').innerText()).startsWith(ui + '/shared/'), 'copied relative backend URL becomes absolute');
  await page.evaluate(() => { localStorage.clear(); sessionStorage.clear(); });

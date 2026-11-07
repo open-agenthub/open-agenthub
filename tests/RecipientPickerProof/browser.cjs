@@ -74,7 +74,7 @@ const state = (page, input, list) => page.evaluate(([inputSelector, listSelector
   const chosen = await alice.locator('[data-recipient-chosen]').innerText()
   check('a status line names the selection', chosen.includes('Username: bob'), chosen)
   check('the click alone does not share', (await (await api(alice, 'GET', '/api/ee/sessions/private/shares')).json()).users?.length === 0)
-  await alice.selectOption('[aria-label="Role"]', 'Collaborator')
+  await alice.selectOption('[aria-label="Role for this person"]', 'Collaborator')
   await alice.getByRole('button', { name: 'Add', exact: true }).click()
   await alice.locator('.person .pname').filter({ hasText: 'bob' }).waitFor()
   const shares = await (await api(alice, 'GET', '/api/ee/sessions/private/shares')).json()

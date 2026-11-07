@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import ShareSessionDialog from './ShareSessionDialog.vue'
 
 // Only the dialog is imported here: the sharing-ui suite also mounts the shared-session page,
@@ -19,6 +19,14 @@ const apiMocks = vi.hoisted(() => ({
 vi.mock('../api.js', () => ({ api: apiMocks.api }))
 
 const session = { id: 's1', title: 'Owner session' }
+
+// Every dialog is unmounted after its test, which clears its 250 ms recipient lookup (#518). The
+// license tests type 'carol' and 'nobody' with real timers; left mounted, that lookup stayed
+// pending, and on a loaded machine it landed inside a picker test after vi.clearAllMocks(), as a
+// second findShareRecipients call. Timers go back to real here too, so a picker test that fails
+// before its own cleanup cannot leave fake timers to the next one.
+enableAutoUnmount(afterEach)
+afterEach(() => { vi.useRealTimers() })
 
 describe('ShareSessionDialog MCP policy', () => {
   beforeEach(() => {
@@ -66,7 +74,7 @@ describe('ShareSessionDialog MCP policy', () => {
     const wrapper = mount(ShareSessionDialog, { props: { session } })
     await flushPromises()
 
-    await wrapper.findAll('button').find(b => b.text() === 'Create link').trigger('click')
+    await wrapper.get('[data-create-link]').trigger('click')
     await flushPromises()
 
     expect(wrapper.get('.one-time code').text()).toBe('https://hub.example.com/shared/tok')
@@ -93,7 +101,7 @@ describe('ShareSessionDialog without a license', () => {
     expect(wrapper.text()).not.toContain('An active enterprise license is required')
     expect(wrapper.text()).not.toContain('402')
     expect(wrapper.find('[data-blocked-servers]').exists()).toBe(false)
-    expect(wrapper.findAll('button').find(b => b.text() === 'Create link')).toBeUndefined()
+    expect(wrapper.find('[data-create-link]').exists()).toBe(false)
   })
 
   it('keeps the form and adds the gate when a change is refused with 402', async () => {
@@ -198,7 +206,6 @@ describe('recipient picker', () => {
   }
   const options = wrapper => wrapper.findAll('[aria-label="Matching recipients"] [role=option]')
   const listbox = wrapper => wrapper.get('[role=listbox]')
-  function done(wrapper) { wrapper.unmount(); vi.useRealTimers() }
 
   // #470: the owner typed the full username, so writing it into the input changed nothing.
   it('selects a clicked suggestion visibly, closes the list and shares only on Add', async () => {
@@ -219,13 +226,12 @@ describe('recipient picker', () => {
     expect(apiMocks.api.findShareRecipients).toHaveBeenCalledTimes(1)
     expect(apiMocks.api.createShareUser).not.toHaveBeenCalled()
 
-    await wrapper.get('[aria-label="Role"]').setValue('Collaborator')
+    await wrapper.get('[aria-label="Role for this person"]').setValue('Collaborator')
     await wrapper.findAll('button').find(button => button.text() === 'Add').trigger('click')
     await flushPromises()
     expect(apiMocks.api.createShareUser).toHaveBeenCalledWith('s1', { recipient: 'bob', role: 'Collaborator' })
     expect(input.element.value).toBe('')
     expect(wrapper.find('[data-recipient-chosen]').exists()).toBe(false)
-    done(wrapper)
   })
 
   it('moves with the arrow keys, selects with Enter and shares with a second Enter', async () => {
@@ -245,7 +251,6 @@ describe('recipient picker', () => {
     await input.trigger('keydown', { key: 'Enter' })
     await flushPromises()
     expect(apiMocks.api.createShareUser).toHaveBeenCalledWith('s1', { recipient: 'bobby', role: 'Viewer' })
-    done(wrapper)
   })
 
   it('closes the list on Escape, and typing again drops the selection', async () => {
@@ -260,7 +265,6 @@ describe('recipient picker', () => {
     await input.setValue('Bob Example (bo')
     expect(input.attributes('data-recipient-selected')).toBeUndefined()
     expect(input.element.value).toBe('Bob Example (bo')
-    done(wrapper)
   })
 
   it('still shares an exact username typed without a suggestion', async () => {
@@ -269,6 +273,5 @@ describe('recipient picker', () => {
     await input.trigger('keydown', { key: 'Enter' })
     await flushPromises()
     expect(apiMocks.api.createShareUser).toHaveBeenCalledWith('s1', { recipient: 'carol@example.com', role: 'Viewer' })
-    done(wrapper)
   })
 })
