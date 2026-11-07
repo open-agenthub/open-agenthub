@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { api, getSharedTranscript, sharedTerminalUrl, shellUrl, terminalUrl } from '../api.js'
+import { limitHandshake } from '../lib/handshake.js'
 import { SUBMIT_ENTER_DELAY_MS, submitToAgent } from '../lib/terminal-input.js'
 import { FILE_PASTE_NOTICE, attachTerminalClipboard } from '../lib/terminal-clipboard.js'
 import { terminalAttachmentPaths, terminalSafeFile, uploadAttachmentFiles } from '../lib/attachments.js'
@@ -261,6 +262,7 @@ async function connect() {
   }
   const socket = new WebSocket(url)
   ws = socket
+  limitHandshake(socket)
   if (term) term.options.convertEol = false
   socket.onopen = () => {
     if (disposed || ws !== socket) return

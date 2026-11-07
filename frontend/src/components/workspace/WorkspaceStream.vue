@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api, getSharedTranscript, sharedTerminalUrl, terminalUrl } from '../../api.js'
+import { limitHandshake } from '../../lib/handshake.js'
 import { createAttachmentQueue } from '../../lib/attachments.js'
 import { createChatLog } from '../../lib/chat.js'
 import { chatDrafts as sessionDrafts } from '../../lib/session-drafts.js'
@@ -138,6 +139,7 @@ async function connect() {
 
   const socket = new WebSocket(url)
   ws = socket
+  limitHandshake(socket)
   socket.onopen = () => {
     if (disposed || ws !== socket) return
     emit('status', 'connected')
