@@ -232,6 +232,20 @@ function resetFromText(text, from) {
 
 module.exports = {
   modelCatalog: require('./model-catalog'),
+  // Verified on 2.1.318 (docs/design/live-model-switch.md): `/model <id>` switches the running
+  // conversation and keeps it. Mid-conversation it first asks "Switch model?" because the history
+  // is cached for the old model; the highlighted first answer is "Yes". It takes any id without
+  // checking it against the account, so an id the account cannot use fails at the next turn.
+  modelSwitch: {
+    command: model => '/model ' + model,
+    confirm: () => /^\s*(?:⎿\s*)?Set model to /,
+    dialogs: [{ screen: /^\s*Switch model\?\s*$/, keys: '\r' }],
+    // What prepare() would have put into the CLI's environment had the session started on it. The
+    // CLI also saves the switch as its default in ~/.claude/settings.json; the entrypoint rewrites
+    // that file at every pod start, and ANTHROPIC_MODEL wins over it at an agent restart (checked
+    // on 2.1.318), so the model the hub stores is the one a restart comes back on.
+    childEnv: model => ({ ANTHROPIC_MODEL: model })
+  },
   contextClearCommand: '/clear',
   turnHooks: true,
   // The pinned interactive CLI cancels a running turn on Escape without firing Stop.

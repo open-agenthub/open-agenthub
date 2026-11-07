@@ -124,6 +124,23 @@ jobs:
         run: docker build --file agent-runtime/opencode/Dockerfile --tag open-agenthub-dev/agent-runtime-opencode:test agent-runtime
       - name: Smoke OpenCode CLI
         run: docker run --rm --entrypoint opencode open-agenthub-dev/agent-runtime-opencode:test --version
+      # The model switch walks OpenCode's own picker (agent-runtime/opencode/model-switch.js): the
+      # bare /models, a search by display name, Enter, and its state file. None of that is a stable
+      # interface, so the pinned CLI in the image proves it on every change, a version bump included
+      # (docs/design/live-model-switch.md). The model is a local mock; no provider is reached.
+      # /tmp with exec, as a session pod's emptyDir has it: OpenCode's TUI unpacks its native render
+      # library into TMPDIR and loads it from there, which Docker's default noexec tmpfs refuses
+      # ("failed to map segment from shared object").
+      - name: Prove the OpenCode model switch in the image
+        run: |
+          docker run --rm --read-only --user 1000:1000 \
+            --tmpfs /tmp:rw,exec,mode=1777 -v "$PWD/tests/ModelSwitchProof:/proof:ro" \
+            -e PROOF_RUNTIME=/opt/session-agent -e XTERM=/opt/session-agent -e CLIS=/tmp/clis \
+            --entrypoint bash open-agenthub-dev/agent-runtime-opencode:test -c '
+              mkdir -p /tmp/clis/node_modules/.bin
+              ln -s "$(command -v opencode)" /tmp/clis/node_modules/.bin/opencode
+              node /proof/session-agent-e2e.mjs opencode /tmp/e2e-opencode
+            '
       - name: Verify Python and glab in every runtime with a read-only root
         run: |
           for agent in claude codex cursor openclaw opencode; do

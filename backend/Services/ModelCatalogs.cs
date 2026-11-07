@@ -59,6 +59,10 @@ public sealed record ModelCatalogView
     /// <summary>The session's chosen model, and whether the catalog lists it (session route only).</summary>
     public string? Selected { get; init; }
     public bool? SelectedListed { get; init; }
+    /// <summary>How a pick from the Workspace applies (session route only): <c>live</c>, <c>restart</c>
+    /// or <c>unsupported</c> (ModelSwitchPolicy), and whether this reader may switch at all.</summary>
+    public string? SwitchMode { get; init; }
+    public bool? CanSwitch { get; init; }
 }
 
 /// <summary>Who a catalog belongs to: one owner's account (or key, or endpoint) for one agent.</summary>

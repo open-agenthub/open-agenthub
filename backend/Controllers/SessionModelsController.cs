@@ -18,7 +18,7 @@ namespace AgentHub.Api.Controllers;
 [Authorize]
 [Route("api/sessions/{id}/models")]
 public sealed class SessionModelsController(ISessionAccessService access, ISessionStore sessions, ISessionModelCatalogs catalogs,
-    IModelCatalogStore store, TimeProvider? time = null) : ControllerBase
+    IModelCatalogStore store, ISessionModelSwitch? switcher = null, TimeProvider? time = null) : ControllerBase
 {
     private readonly TimeProvider _time = time ?? TimeProvider.System;
 
@@ -45,6 +45,39 @@ public sealed class SessionModelsController(ISessionAccessService access, ISessi
             await catalogs.ProbeAsync(session, refresh, ct);
             stored = await store.GetAsync(key, ct);
         }
-        return Ok(ModelCatalogSanitizer.View(stored, _time.GetUtcNow(), session.ModelName));
+        return Ok(ModelCatalogSanitizer.View(stored, _time.GetUtcNow(), session.ModelName) with
+        {
+            SwitchMode = ModelSwitchPolicy.ModeFor(session),
+            CanSwitch = canProbe
+        });
+    }
+
+    /// <summary>
+    /// Switches the session's model (#478, docs/design/live-model-switch.md): in the running
+    /// conversation where the CLI can, confirmed by the CLI before this answers; otherwise stored
+    /// for the next start. Owners and collaborators only — collaborators already type into the
+    /// terminal, where the CLI's own /model does the same. Viewers read the current model.
+    /// </summary>
+    [HttpPost("~/api/sessions/{id}/model")]
+    public async Task<IActionResult> Switch(string id, [FromBody] ModelSwitchRequest request, CancellationToken ct)
+    {
+        Response.Headers.CacheControl = "no-store";
+        var principal = User.FindFirstValue("preferred_username") ?? User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (principal is null) return Unauthorized();
+        var resolved = await access.ResolveUserAsync(principal, id, ct);
+        if (resolved is null || resolved.Level == SessionAccessLevel.None) return NotFound();
+        if (resolved.Level < SessionAccessLevel.Collaborator) return StatusCode(403, new { error = "model_switch_not_allowed" });
+        var session = await sessions.GetByIdAsync(resolved.Session.Id, ct);
+        if (session is null) return NotFound();
+        if (switcher is null) return StatusCode(503, new { error = "model_switch_unavailable" });
+        try
+        {
+            return Ok(await switcher.SwitchAsync(session, request?.Model, ct));
+        }
+        catch (ModelSwitchRefusedException refused)
+        {
+            return StatusCode(refused.Status, refused.Detail is null
+                ? new { error = refused.Code } : (object)new { error = refused.Code, detail = refused.Detail });
+        }
     }
 }

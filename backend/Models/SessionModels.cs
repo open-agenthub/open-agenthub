@@ -184,9 +184,12 @@ public static class AgentConfiguration
     // "-" would read as an option on Cursor's command line.
     private static void ValidateModelName(string model)
     {
-        if (model.Length > MaxModelNameLength || model.Any(c => char.IsWhiteSpace(c) || char.IsControl(c)) || model.StartsWith('-'))
+        if (!IsValidModelName(model))
             throw new ArgumentException($"The model name must be at most {MaxModelNameLength} characters, without spaces, and not start with '-'.");
     }
+
+    public static bool IsValidModelName(string model) =>
+        model.Length <= MaxModelNameLength && !model.Any(c => char.IsWhiteSpace(c) || char.IsControl(c)) && !model.StartsWith('-');
 
     private static void ValidateOpenClawApiKeySource(AgentKind agent, AgentAuthMode authMode,
         OpenClawApiKeySource? openClawApiKeySource)
