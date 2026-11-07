@@ -125,7 +125,7 @@ exit classification; before the fix, the real PTY supplied code zero plus signal
 runtime incorrectly reported success. This proves native-process handling, not kubelet
 restart policy, pod-loss reconciliation or backend crash recovery.
 
-## Native/container death and explicit owner resume
+## Container/pod crash and explicit owner resume
 
 Dispatch the same workflow with `prove_provider_recovery=true` and
 `provider_recovery_scope=runtime`. This skips journal crash gates and runs the real native
@@ -142,7 +142,7 @@ strict archive requirement, empty startup prompt, same claim/dirty repositories,
 handover and a new owner turn in the same generation. The recording model must also receive
 the checkpointed owner context after recovery. Only the acknowledged checkpoint is covered;
 uncheckpointed recent turns are not claimed durable. Run API-key and synthetic subscription
-Claude→Codex→Claude. This acceptance result remains pending until its worker dispatch passes.
+Claude→Codex→Claude. This acceptance passed in worker run 42409310743: four container/pod crash and owner-resume cases, with the full workflow successful.
 This does not model kernel OOM, node loss or a target dying before generation commitment.
 
 ## Held operations and real storage/network failure
