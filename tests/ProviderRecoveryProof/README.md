@@ -104,3 +104,13 @@ The real terminal starts without any provider-switch request, runs an initial tu
 replacement flag. Its new owner turn must use the second native ID and context, while the
 production transcript retains both visible turns. This compatibility control passed locally;
 it is not a backend generation-switch or whole-browser acceptance result.
+
+## Native target process death
+
+Run the local archive capture command with `PROOF_CRASH_NATIVE_TARGET=1` instead of
+`PROOF_RESUME_ARCHIVE=1`. After the real native handover answer, the rig kills the isolated
+server's single actual PTY child. The runtime must exit unsuccessfully without starting a
+fresh CLI or making another handover request. The signal fix is isolated in #537; this control requires that patch. Both pinned CLIs passed after signal-aware
+exit classification; before the fix, the real PTY supplied code zero plus signal 9 and the
+runtime incorrectly reported success. This proves native-process handling, not kubelet
+restart policy, pod-loss reconciliation or backend crash recovery.

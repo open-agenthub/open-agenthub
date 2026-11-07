@@ -11,9 +11,9 @@ export function createRecoveryFaults({json,control='agenthub'}){
  let next=0,failure,stopping=false;
  const operations=new Map(),leases=new Set();
  const check=()=>{if(failure)throw Object.assign(failure,{fatal:true});};
- async function wait(fn,description){
+ async function wait(fn,description,cleanup=false){
   for(let attempt=0;attempt<360;attempt++){
-   if(stopping)throw new Error('fault coordinator stopped');
+   if(stopping&&!cleanup)throw new Error('fault coordinator stopped');
    const value=fn();if(value)return value;await sleep(250);
   }
   throw new Error(description+': timeout');
@@ -24,20 +24,28 @@ export function createRecoveryFaults({json,control='agenthub'}){
   // Queue before the crash, ahead of replicas trying the nonblocking lifecycle lease.
   // The lease holds no journal/table lock while a replacement runs schema initialization.
   const child=spawn('kubectl',[...psql,`SET application_name='${name}'; SELECT pg_advisory_lock(hashtextextended('${id}',1)); SELECT pg_sleep(600);`],{stdio:['ignore','pipe','pipe']});
-  child.stdout.resume();child.stderr.resume();
+  child.stdout.resume();let stderr='';child.stderr.on('data',bytes=>{stderr+=bytes;});
+  child.on('error',error=>{failure=error;});
+  child.once('exit',(code,signal)=>console.log('Recovery lease '+name+': client exit '+code+'/'+signal+(stderr?' ('+stderr.trim()+')':'')));
   const lease={child,name};leases.add(lease);
   lease.pid=await wait(()=>sql(`SELECT a.pid FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid WHERE a.application_name='${name}' AND l.locktype='advisory' AND NOT l.granted;`),'external lifecycle waiter queues');
   assert(/^\d+$/.test(lease.pid));
+  console.log('Recovery lease '+name+': queued database PID '+lease.pid);
   return lease;
  }
  async function unpark(lease){
-  const exited=new Promise(resolve=>{if(lease.child.exitCode!==null)resolve();else lease.child.once('exit',resolve);});
+  const exited=new Promise(resolve=>{if(lease.child.exitCode!==null||lease.child.signalCode!==null)resolve();else lease.child.once('exit',resolve);});
   // The connection can queue successfully before its PID reaches the observer; cleanup
   // still needs to release that remote lease if observation itself fails.
   sql(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name='${lease.name}';`);
+  await wait(()=>sql(`SELECT count(*) FROM pg_stat_activity WHERE application_name='${lease.name}';`)==='0','external lifecycle database connection disappears',true);
   let timer;
-  try { await Promise.race([exited,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('external lifecycle client did not exit')),10000);})]); }
+  try { await Promise.race([exited,new Promise(resolve=>{timer=setTimeout(resolve,2000);})]); }
   finally { clearTimeout(timer); }
+  if(lease.child.exitCode===null&&lease.child.signalCode===null){
+   console.warn('Recovery lease '+lease.name+': database lease released; terminate remaining local exec transport');
+   lease.child.kill('SIGTERM');
+  }
   leases.delete(lease);
  }
  async function arm(id,requestId,cancellation=false){
@@ -58,20 +66,27 @@ export function createRecoveryFaults({json,control='agenthub'}){
     assert(backend,'the blocked database writer must be a real backend pod');
     const lease=await park(id,gate.sequence);
     execFileSync('kubectl',['-n',control,'delete','pod',backend.metadata.name,'--grace-period=0','--wait=true','--timeout=90s'],{stdio:'pipe',timeout:100000});
+    console.log('Recovery '+requestId+': deleted backend '+backend.metadata.name+' for writer PID '+pid);
     await wait(()=>sql('SELECT count(*) FROM pg_stat_activity WHERE pid='+Number(pid)+';')==='0','crashed backend connection disappears');
+    console.log('Recovery '+requestId+': crashed writer connection disappeared');
     await wait(()=>sql(`SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid=${Number(lease.pid)} AND locktype='advisory' AND granted);`)==='t','external lifecycle lease acquired');
+    console.log('Recovery '+requestId+': external lifecycle lease acquired');
     assert.equal(sql(`SELECT phase FROM session_provider_switches WHERE request_id='${requestId}';`),before,'crash rolls back the unacknowledged phase write');
     assert.equal(snapshot(),identity,'generation/provider/authority rotation must roll back with the interrupted phase');
     sql('UPDATE provider_recovery_proof_gates SET released=TRUE WHERE sequence='+gate.sequence+';');
+    console.log('Recovery '+requestId+': gate released, waiting for replacement startup');
     execFileSync('kubectl',['-n',control,'rollout','status','deployment/agenthub-backend','--timeout=120s'],{stdio:'pipe',timeout:130000});
     await unpark(lease);
     console.log('Recovery '+requestId+': crashed real backend at '+before+' → '+gate.phase+'; committed phase retained.');
    }
-  })().catch(error=>{if(!stopping){failure=error;console.error('Fault coordinator failed:',error.message);}});
+  })().catch(error=>{if(!stopping){failure=error;console.error('Fault coordinator failed:',error.message);try{console.error('Recovery database waits:',sql("SELECT json_agg(json_build_object('pid',pid,'application',application_name,'state',state,'waitType',wait_event_type,'wait',wait_event,'blockedBy',pg_blocking_pids(pid))) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid();"));}catch{}}});
   operations.set(requestId,completion);
  }
  return {
   check,arm,
+  diagnostics(){
+   try{console.error('Recovery database waits:',sql("SELECT json_agg(json_build_object('pid',pid,'application',application_name,'state',state,'waitType',wait_event_type,'wait',wait_event,'blockedBy',pg_blocking_pids(pid))) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid();"));}catch(error){console.error('Recovery wait diagnostics unavailable:',error.message);}
+  },
   async finish(requestId){await operations.get(requestId);check();},
   async close(){
    stopping=true;

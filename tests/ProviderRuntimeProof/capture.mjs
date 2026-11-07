@@ -199,6 +199,22 @@ try {
       });
       let resumeNativeId=state.nativeId;
       let resumeHistory='HISTORY-'+agent+'-0';
+      if(process.env.PROOF_CRASH_NATIVE_TARGET==='1'){
+        assert(process.env.PROOF_SOURCE_PREPARE!=='1','native crash control uses the direct production server');
+        const native=fs.readFileSync(`/proc/${child.pid}/task/${child.pid}/children`,'utf8').trim().split(/\s+/).map(Number);
+        assert.equal(native.length,1,'identify the single real PTY child before faulting it');
+        const inference=()=>requests.filter(item=>item.text.includes(resumeHistory)&&!item.route.includes('count_tokens'));
+        const before=inference().length;assert(before>0);
+        const exited=new Promise(resolve=>child.once('exit',resolve));
+        process.kill(native[0],'SIGKILL');
+        let timer;
+        try{await Promise.race([exited,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('native crash did not terminate the runtime')),20000);})]);}
+        finally{clearTimeout(timer);}
+        assert.notEqual(child.exitCode,0,'native crash must not report successful completion');
+        await sleep(1000);assert.equal(inference().length,before,'a crashed target must not replay its startup handover');
+        console.log(agent+': real native target killed after handover receipt; runtime exited without fresh startup or replay');
+        continue;
+      }
       if(!ordinaryNew){
       assert(state.draining);
       socket.send(JSON.stringify({ type: 'input', data: 'BLOCKED-BEFORE-RELEASE\r' }));
@@ -353,7 +369,7 @@ try {
       fs.writeFileSync(path.join(root, 'terminal.txt'), Array.from({ length: term.rows }, (_, n) =>
         term.buffer.active.getLine(term.buffer.active.viewportY + n)?.translateToString(true) ?? '').join('\n'));
       socket.close(); term.dispose();
-      process.kill(-child.pid, 'SIGTERM'); await new Promise(resolve => child.once('exit', resolve)); child = null;
+      if(child.exitCode===null){process.kill(-child.pid, 'SIGTERM'); await new Promise(resolve => child.once('exit', resolve));} child = null;
     }
   }
   fs.writeFileSync(path.join(out, 'model-requests.json'), JSON.stringify(requests, null, 2));

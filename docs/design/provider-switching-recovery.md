@@ -107,3 +107,14 @@ including explicit clears. New checkpoints migrate that selection into metadata 
 the recorded execution. Missing native state still fails closed under #533. Legacy pointer
 integrity is not retroactively proved by the new metadata. The wider fault matrix remains
 in #529/#530, and storage provisioning stays default off.
+
+
+## Extracted native signal-exit patch (#535/#537)
+
+The real target-process crash control killed the PTY child after handover receipt. The PTY
+reported exit code zero with signal 9, which the transport classified as successful. Treat
+a signal termination as failure even when the PTY code is zero, retaining the signal in the
+termination diagnostic. Planned source shutdown and deliberate runtime restarts use their
+existing branches before this classification. Reject inferring success from code zero alone:
+a killed target is not a completed native execution. The real pinned Claude/Codex controls
+verify unsuccessful transport exit and no second startup/handover request.
