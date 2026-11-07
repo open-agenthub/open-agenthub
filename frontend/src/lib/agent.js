@@ -1,3 +1,4 @@
+import { supportsModelChoice } from './model-catalog.js'
 export const agentOptions = [
   { value: 'Claude', label: 'Claude', hint: 'Claude agent runtime' },
   { value: 'Codex', label: 'Codex', hint: 'Codex agent runtime' },
@@ -128,9 +129,13 @@ export function agentPayload(form) {
   if (needsOpenClawApiKeySource(form.agent, form.authMode)) {
     payload.openClawApiKeySource = form.openClawApiKeySource || 'Anthropic'
   }
-  // Only with the mode: the backend refuses endpoint fields on any other one.
+  // Only with the mode: the backend refuses an endpoint URL on any other one.
   if (form.authMode === 'CustomEndpoint') {
     payload.modelEndpointUrl = String(form.modelEndpointUrl || '').trim()
+    payload.modelName = String(form.modelName || '').trim()
+  } else if (supportsModelChoice(form.agent)) {
+    // The model the session starts on (#461); "" asks for the CLI's default and, in an edit,
+    // clears a stored choice.
     payload.modelName = String(form.modelName || '').trim()
   }
   return payload

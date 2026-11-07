@@ -30,7 +30,7 @@ describe('custom model endpoint', () => {
   it('sends the endpoint only with its mode, trimmed', () => {
     const form = { agent: 'Codex', authMode: 'CustomEndpoint', modelEndpointUrl: ' https://llm.example.com/v1 ', modelName: ' m1 ' }
     expect(agentPayload(form)).toEqual({ agent: 'Codex', authMode: 'CustomEndpoint', modelEndpointUrl: 'https://llm.example.com/v1', modelName: 'm1' })
-    expect(agentPayload({ ...form, authMode: 'ApiKey' })).toEqual({ agent: 'Codex', authMode: 'ApiKey' })
+    expect(agentPayload({ ...form, authMode: 'ApiKey' })).toEqual({ agent: 'Codex', authMode: 'ApiKey', modelName: 'm1' })
     expect(defaultAgentForm({ agent: 'Claude', authMode: 'CustomEndpoint', modelEndpointUrl: 'https://llm.example.com/v1', modelName: 'm1' }))
       .toMatchObject({ modelEndpointUrl: 'https://llm.example.com/v1', modelName: 'm1' })
   })
@@ -126,7 +126,7 @@ describe('agent session helpers', () => {
     expect(agentPayload({ agent: 'OpenClaw', authMode: 'Subscription', openClawApiKeySource: 'Anthropic' }))
       .toEqual({ agent: 'OpenClaw', authMode: 'Subscription' })
     expect(agentPayload({ agent: 'Claude', authMode: 'ApiKey', openClawApiKeySource: 'Anthropic' }))
-      .toEqual({ agent: 'Claude', authMode: 'ApiKey' })
+      .toEqual({ agent: 'Claude', authMode: 'ApiKey', modelName: '' })
   })
 
   it('preserves openClawApiKeySource when loading an existing form', () => {
@@ -254,7 +254,7 @@ describe('agent session helpers', () => {
       .toMatchObject({ ready: false, text: expect.stringContaining('No OpenCode API key') })
     expect(credentialReadiness('OpenCode', 'Subscription', 'Autonomous', { opencodeSubscription: true }).ready).toBe(true)
     expect(credentialReadiness('OpenCode', 'Subscription', 'Interactive', {}).text).toContain('sign in inside the session')
-    expect(agentPayload({ agent: 'OpenCode', authMode: 'ApiKey' })).toEqual({ agent: 'OpenCode', authMode: 'ApiKey' })
+    expect(agentPayload({ agent: 'OpenCode', authMode: 'ApiKey' })).toEqual({ agent: 'OpenCode', authMode: 'ApiKey', modelName: '' })
   })
 })
 

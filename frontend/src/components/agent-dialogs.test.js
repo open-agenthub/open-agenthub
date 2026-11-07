@@ -84,7 +84,7 @@ describe('agent-aware session dialogs', () => {
     expect(wrapper.get('[data-endpoint-protocol]').text()).toContain('/v1/responses')
     expect(wrapper.find('[data-account-choice]').exists()).toBe(false)
     await wrapper.get('[data-endpoint-url]').setValue('https://llm.example.com/v1')
-    await wrapper.get('[data-endpoint-model]').setValue('qwen3-coder-30b')
+    await wrapper.get('[data-endpoint-model] [data-model-input]').setValue('qwen3-coder-30b')
     await wrapper.get('[data-submit]').trigger('click')
 
     expect(mocks.api.createSession).toHaveBeenCalledWith(expect.objectContaining({
@@ -112,7 +112,7 @@ describe('agent-aware session dialogs', () => {
     await flushPromises()
     expect(wrapper.get('[data-endpoint-url]').element.value).toBe('https://llm.example.com/v1')
     expect(wrapper.find('.failover-field').exists()).toBe(false)
-    await wrapper.get('[data-endpoint-model]').setValue('new-model')
+    await wrapper.get('[data-endpoint-model] [data-model-input]').setValue('new-model')
     await wrapper.get('[data-submit]').trigger('click')
     await flushPromises()
 

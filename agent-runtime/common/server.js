@@ -2181,7 +2181,6 @@ function createCommonServer(options = {}) {
   // account's models before anyone opens a picker. Delayed past the CLI's own start, which reads
   // and may refresh the same login files.
   function pushModelCatalog() {
-    if (!callback || !token || !modelCatalog.supported() || env.AGENTHUB_MODEL_DISCOVERY === '0') return;
     modelCatalog.get().then(catalog => fetchImpl(callback + '/models', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Agent-Token': token },
@@ -2484,9 +2483,11 @@ function createCommonServer(options = {}) {
     ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/git-credentials, /agenthub/messages, /agenthub/transcript, /agenthub/commands, /agenthub/models, /agenthub/attachments' +
     (modToken ? ', /agenthub/mod/*' : '') + ')');
   postStatus('Running');
-  const modelDelay = Number.parseInt(env.AGENTHUB_MODEL_DISCOVERY_DELAY_MS || '', 10);
-  const modelTimer = setTimeoutImpl(pushModelCatalog, Number.isSafeInteger(modelDelay) && modelDelay >= 0 ? modelDelay : 45_000);
-  if (modelTimer && typeof modelTimer.unref === 'function') modelTimer.unref();
+  if (callback && token && modelCatalog.supported() && env.AGENTHUB_MODEL_DISCOVERY !== '0') {
+    const modelDelay = Number.parseInt(env.AGENTHUB_MODEL_DISCOVERY_DELAY_MS || '', 10);
+    const modelTimer = setTimeoutImpl(pushModelCatalog, Number.isSafeInteger(modelDelay) && modelDelay >= 0 ? modelDelay : 45_000);
+    if (modelTimer && typeof modelTimer.unref === 'function') modelTimer.unref();
+  }
 
   for (const signal of ['SIGTERM', 'SIGINT']) {
     processLike.on(signal, () => {

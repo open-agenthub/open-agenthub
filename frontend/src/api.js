@@ -118,6 +118,11 @@ export const api = {
   findShareRecipients: (id, query) => req('GET', `/ee/sessions/${encodeURIComponent(id)}/shares/recipients?query=${encodeURIComponent(query)}`),
   getSession: (id) => req('GET', `/sessions/${id}`),
   sessionCommands: id => req('GET', `/sessions/${encodeURIComponent(id)}/commands`),
+  // Account-aware model lists (#461): the caller's stored catalog for an account, a refresh through
+  // one of their running sessions on it, and a session's own catalog.
+  modelCatalog: query => req('GET', `/model-catalog?${new URLSearchParams(query)}`),
+  refreshModelCatalog: query => req('POST', `/model-catalog/refresh?${new URLSearchParams(query)}`),
+  sessionModels: (id, refresh = false) => req('GET', `/sessions/${encodeURIComponent(id)}/models${refresh ? '?refresh=true' : ''}`),
   terminalAttachments: (id, fileIds) => req('POST', `/sessions/${encodeURIComponent(id)}/terminal-attachments`, { fileIds }),
   workspaceDiff: (id, comparison = 'base') => req('GET', `/sessions/${encodeURIComponent(id)}/diff?comparison=${encodeURIComponent(comparison)}`),
   sessionFileCapabilities: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/files/capabilities`),
