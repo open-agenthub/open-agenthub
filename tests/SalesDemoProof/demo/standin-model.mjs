@@ -40,6 +40,15 @@ function reply(body) {
   const asked = JSON.stringify(lastUser?.content || '')
   const toolResult = Array.isArray(last.content) && last.content.find(b => b.type === 'tool_result')
   const tag = `[stand-in model ${body.model || '?'}] `
+  const lastText = JSON.stringify(last.content || '')
+  // Claude Code's own side requests: a session title (sent without tools) and a next-prompt
+  // suggestion. Answered plainly, or they would replay the scripted task.
+  if (!(body.tools || []).length) return [{ type: 'text', text: 'Invoice rounding fix (#42)' }]
+  if (lastText.includes('SUGGESTION MODE')) return [{ type: 'text', text: 'Open a pull request for fix/42-rounding' }]
+  // The hub's Stop hook asks every agent, before it finishes, whether something belongs in the
+  // skill library; this is the stand-in's answer to that question.
+  // The question arrives as a user message followed by a system message, so look at both.
+  if (JSON.stringify(msgs.slice(-2)).includes('Stop hook')) return [{ type: 'text', text: tag + 'Nothing reusable to save as a skill this time.' }]
   if (toolResult) {
     const out = JSON.stringify(toolResult.content || '').slice(0, 600)
     return [{ type: 'text', text: tag + (asked.includes('DEMO-TEST')
@@ -64,7 +73,7 @@ http.createServer((req, res) => {
     if (req.url.includes('count_tokens')) { res.writeHead(200, { 'content-type': 'application/json' }); return res.end('{"input_tokens":10}') }
     n++
     const content = reply(body)
-    console.log(JSON.stringify({ at: new Date().toISOString(), n, model: body.model, stream: !!body.stream, msgs: (body.messages || []).length, reply: content[0].type === 'tool_use' ? 'tool_use' : content[0].text.slice(0, 80) }))
+    console.log(JSON.stringify({ at: new Date().toISOString(), n, model: body.model, stream: !!body.stream, msgs: (body.messages || []).length, tools: (body.tools || []).length, tail: (body.messages || []).slice(-2).map(m => m.role + ':' + JSON.stringify(m.content).slice(0, 160)), reply: content[0].type === 'tool_use' ? 'tool_use' : content[0].text.slice(0, 80) }))
     const stop = content[0].type === 'tool_use' ? 'tool_use' : 'end_turn'
     const usage = { input_tokens: 1200, output_tokens: 300 }
     const msg = { id: 'msg_' + n, type: 'message', role: 'assistant', model: body.model || 'standin-fast', content: [], stop_reason: null, stop_sequence: null, usage }
