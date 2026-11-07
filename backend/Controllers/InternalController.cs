@@ -279,7 +279,10 @@ public sealed class InternalController : ControllerBase
         // Claude's tokens already arrive over OTLP; a second source would count them twice.
         if (rec.Agent == AgentKind.Claude) return NoContent();
 
-        await _usage.AddReportedUsageAsync(id, rec.Owner, rec.Agent.ToString().ToLowerInvariant(),
+        if (_usage is IExecutionUsageStore executions)
+            await executions.AddReportedExecutionUsageAsync(id, rec.Owner, rec.ExecutionGeneration,
+                rec.Agent.ToString().ToLowerInvariant(), UsageBilling.Classify(rec.AuthMode.ToString(), null), body, ct);
+        else await _usage.AddReportedUsageAsync(id, rec.Owner, rec.Agent.ToString().ToLowerInvariant(),
             UsageBilling.Classify(rec.AuthMode.ToString(), null), body, ct);
         return NoContent();
     }
@@ -1081,6 +1084,8 @@ public sealed class InternalController : ControllerBase
         IReadOnlyList<SessionMessageRecord> taken;
         while (true)
         {
+            if ((await _store.GetByIdAsync(id, ct))?.ProviderSwitchPending == true)
+                return Ok(new { messages = Array.Empty<AgentMessageInfo>() });
             taken = await _messages.TakeUndeliveredAsync(id, AgentMessaging.InboxBatchLimit, takenVia, ct);
             if (taken.Count > 0 || DateTime.UtcNow >= deadline) break;
             await Task.Delay(TimeSpan.FromSeconds(1), ct);

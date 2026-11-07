@@ -59,6 +59,13 @@ public class ProviderSwitchJournalTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => reopened.AdmitTargetAsync("alice", "s", request.RequestId));
         Assert.Equal(target.CallbackToken, (await database.Sessions.GetAsync("alice", "s"))!.CallbackToken);
         await Assert.ThrowsAsync<ArgumentException>(() => reopened.MoveAsync("alice", "s", request.RequestId, "target-admitted", new("cancelled")));
+        await reopened.MoveAsync("alice", "s", request.RequestId, "target-admitted", new("target-starting"));
+        await reopened.MoveAsync("alice", "s", request.RequestId, "target-starting", new("target-started", TargetPodUid: "target-pod"));
+        var confirmedNative = Guid.NewGuid().ToString();
+        await reopened.MoveAsync("alice", "s", request.RequestId, "target-started", new("committing", TargetPodUid: "target-pod", TargetNativeId: confirmedNative));
+        Assert.Equal(confirmedNative, (await database.Sessions.GetAsync("alice", "s"))!.AgentSessionId);
+        await reopened.MoveAsync("alice", "s", request.RequestId, "committing", new("completed", TargetNativeId: confirmedNative));
+        Assert.False((await database.Sessions.GetAsync("alice", "s"))!.ProviderSwitchPending);
         await database.Sessions.DeleteAsync("s");
         Assert.Null(await reopened.GetAsync("alice", "s"));
         Assert.Empty(await reopened.PendingAsync());

@@ -19,6 +19,22 @@ namespace AgentHub.Api.Tests;
 /// </summary>
 public class UsageStoresPostgresTests
 {
+    [PostgreSqlFact]
+    public async Task NewExecutionAddsFullFirstReportEvenWhenItExceedsOldCounters()
+    {
+        await using var db = await PostgresUsageDatabase.CreateAsync();
+        await db.AddSessionAsync("s", "alice", AgentAuthMode.Subscription);
+        await db.Usage.AddReportedExecutionUsageAsync("s", "alice", 0, "codex", UsageBilling.Subscription, new(100, 10, 0, 0, 0, 1, null));
+        await db.Usage.AddReportedExecutionUsageAsync("s", "alice", 2, "codex", UsageBilling.Subscription, new(150, 20, 0, 0, 0, 1, null));
+        await db.Usage.AddReportedExecutionUsageAsync("s", "alice", 2, "codex", UsageBilling.Subscription, new(150, 20, 0, 0, 0, 1, null));
+        var usage = (await db.Usage.GetAsync("alice", "s"))!;
+        Assert.Equal(250, usage.InputTokens);
+        Assert.Equal(30, usage.OutputTokens);
+        Assert.Equal(2, usage.Turns);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => db.Usage.AddReportedExecutionUsageAsync("s", "alice", 0, "codex", UsageBilling.Subscription, new(200, 30, 0, 0, 0, 2, null)));
+        Assert.Equal(250, (await db.Usage.GetAsync("alice", "s"))!.InputTokens);
+    }
+
     // ---------------------------------------------------------------- usage store
 
     [PostgreSqlFact]

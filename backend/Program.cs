@@ -48,6 +48,8 @@ builder.Services.AddSingleton<ISessionService, KubernetesSessionService>();
 builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileRegistry, AgentHub.Api.Files.PostgresSessionFileRegistry>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<IExecutionFence, PostgresExecutionFence>();
+builder.Services.AddSingleton<AgentHub.Api.Persistence.IProviderSwitchStore, AgentHub.Api.Persistence.PostgresProviderSwitchStore>();
+builder.Services.AddHostedService<ProviderReplacementWorker>();
 builder.Services.AddSingleton<AgentHub.Api.Files.IAgentCallbackAuthorizer, AgentHub.Api.Files.AgentCallbackAuthorizer>();
 builder.Services.AddSingleton<AgentHub.Api.Files.IProjectFileAccess, AgentHub.Api.Files.ProjectFileAccess>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ISessionWorkspaceStore, AgentHub.Api.Persistence.PostgresSessionWorkspaceStore>();
@@ -570,6 +572,7 @@ await AgentHub.Api.Persistence.SchemaMigrationLock.RunAsync(app.Configuration, a
         await store.InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISessionExecutionStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISessionWorkspaceStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IProviderSwitchStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISessionMessageStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Files.ISessionFileRegistry>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Browser.IBrowserLeaseStore>().InitializeAsync();

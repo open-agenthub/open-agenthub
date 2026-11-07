@@ -11,10 +11,12 @@ public interface ISessionContextClear
 }
 
 public sealed class SessionContextClear(IAgentPodRequests pods, ISessionStore store,
-    IConfiguration configuration) : ISessionContextClear
+    IConfiguration configuration, ISessionExpiryLock? lifecycle = null) : ISessionContextClear
 {
     public async Task<ContextClearOutcome> ScheduleAsync(SessionInfo session, ContextClearRequest request, CancellationToken ct)
     {
+        await using var held = lifecycle is null ? null : await lifecycle.TryAcquireAsync(session.Id, ct);
+        if (lifecycle is not null && held is null) throw new InvalidOperationException("session_maintenance_pending");
         if (string.IsNullOrWhiteSpace(request.FollowUp) || request.FollowUp.Length > 16_000 ||
             request.FollowUp.Any(character => char.IsControl(character) && character is not ('\n' or '\r' or '\t')))
             throw new ArgumentException("invalid_follow_up");
@@ -25,6 +27,7 @@ public sealed class SessionContextClear(IAgentPodRequests pods, ISessionStore st
             throw new InvalidOperationException("session_not_running");
         var record = await store.GetByIdAsync(session.Id, ct);
         if (record is null) throw new InvalidOperationException("session_not_found");
+        if (record.ProviderSwitchPending) throw new InvalidOperationException("provider_switch_pending");
         var uri = new UriBuilder("http", address.ToString(), configuration.GetValue("AgentHub:AgentPort", 7681),
             "agenthub/context-clear").Uri;
         using var message = new HttpRequestMessage(HttpMethod.Post, uri);

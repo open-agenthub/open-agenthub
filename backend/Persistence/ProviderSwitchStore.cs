@@ -10,9 +10,9 @@ namespace AgentHub.Api.Persistence;
 public sealed record ProviderSwitchTarget(AgentKind Agent, AgentAuthMode AuthMode, string? CredentialId,
     string? ModelEndpointUrl, string? ModelName);
 public sealed record ProviderSwitchRequest(Guid RequestId, string SessionId, long SourceGeneration,
-    AgentKind SourceAgent, string SourcePodUid, string ClaimUid, ProviderSwitchTarget Target, string Handover);
+    AgentKind SourceAgent, string SourcePodUid, string ClaimUid, ProviderSwitchTarget Target, string Handover, string? ReviewHash = null);
 public sealed record ProviderSwitchProgress(string Phase, string? TargetPodUid = null,
-    string? SourceNativeId = null, IReadOnlyList<TranscriptEntry>? SourceEntries = null, string? Error = null);
+    string? SourceNativeId = null, IReadOnlyList<TranscriptEntry>? SourceEntries = null, string? Error = null, string? TargetNativeId = null);
 public sealed record ProviderSwitchOperation(ProviderSwitchRequest Request, ProviderSwitchProgress Progress);
 
 public interface IProviderSwitchStore
@@ -52,6 +52,7 @@ public sealed class PostgresProviderSwitchStore(IConfiguration configuration, IE
             || request.Target.Agent is not (AgentKind.Claude or AgentKind.Codex) || request.SourceAgent == request.Target.Agent)
             throw new ArgumentException("Invalid provider replacement request.");
         AgentConfiguration.ValidateForCreate(request.Target.Agent, request.Target.AuthMode);
+        await using var admission = await fence.WriteAsync(request.SessionId, ct);
         // Lock the registry before admission so two owners' requests cannot both observe it idle.
         await using var command = _db.CreateCommand("""
             WITH owned AS (
@@ -99,19 +100,22 @@ public sealed class PostgresProviderSwitchStore(IConfiguration configuration, IE
     {
         var allowed = expectedPhase == progress.Phase || (expectedPhase, progress.Phase) is
             ("requested", "prepared") or ("requested", "cancelled") or ("prepared", "cancelled")
-            or ("prepared", "source-stopped") or ("target-admitted", "target-started")
+            or ("prepared", "source-stopped") or ("target-admitted", "target-starting") or ("target-starting", "target-started")
             or ("target-started", "committing") or ("committing", "completed");
-        if (!allowed) throw new ArgumentException("Invalid replacement transition.");
+        if (!allowed || (progress.Phase == "committing" && !Guid.TryParse(progress.TargetNativeId, out _)))
+            throw new ArgumentException("Invalid replacement transition or target native identity.");
         await using var command = _db.CreateCommand("""
             WITH moved AS (
                 UPDATE session_provider_switches p SET progress=@progress,phase=@next,updated_at=now() FROM sessions s
                 WHERE p.session_id=s.id AND s.owner=@owner AND s.id=@id AND p.request_id=@requestId AND p.phase=@expected
                 RETURNING p.session_id
-            ) UPDATE sessions SET provider_switch_pending=(@next NOT IN ('completed','cancelled'))
+            ) UPDATE sessions SET provider_switch_pending=(@next NOT IN ('completed','cancelled')),
+                agent_session_id=CASE WHEN @next='committing' THEN @native ELSE agent_session_id END
                 WHERE id IN (SELECT session_id FROM moved)
             """);
         Identity(command, owner, id, requestId);
         command.Parameters.AddWithValue("progress", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(progress, Json));
+        command.Parameters.AddWithValue("native", (object?)progress.TargetNativeId ?? DBNull.Value);
         command.Parameters.AddWithValue("expected", expectedPhase); command.Parameters.AddWithValue("next", progress.Phase);
         if (await command.ExecuteNonQueryAsync(ct) != 1) throw new InvalidOperationException("Replacement state changed.");
     }

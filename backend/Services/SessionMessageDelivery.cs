@@ -65,6 +65,7 @@ public sealed class SessionMessageDelivery : ISessionMessageDelivery
         // The callback token lives on the record, not on the public SessionInfo the callers hold.
         var record = await _sessions.GetByIdAsync(target.Id, ct);
         if (record is null) return new MessageDelivery(MessageDeliveryVia.Inbox, "session_not_found");
+        if (record.ProviderSwitchPending) return new MessageDelivery(MessageDeliveryVia.Inbox, "provider_switch_pending");
 
         var uri = new UriBuilder("http", target.PodIp, _agentPort, "agenthub/messages").Uri;
         PodDeliveryResponse? answer;

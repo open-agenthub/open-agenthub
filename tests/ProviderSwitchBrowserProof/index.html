@@ -1,0 +1,20 @@
+<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Provider switch UI proof</title>
+<style>body{margin:0;background:#151515;color:#eee;font:16px sans-serif;--bg:#151515;--panel:#242424;--text:#eee;--border:#555}header{position:relative;padding:16px;display:flex;justify-content:space-between}.bar-btn{padding:8px;border:1px solid #888;background:#333;color:#fff;cursor:pointer}.primary{background:#365f9c}main{padding:16px}</style></head><body><div id="app"></div>
+<script type="module">
+import { createApp, ref } from 'vue'
+import ProviderSwitch from '@provider-switch'
+const session={id:'proof',agent:'Claude',executionGeneration:0}
+let operation=null,available=false
+const calls=[]
+const client={
+ providerSwitchStatus:async()=>({available:available&&!operation,reason:'Switching not available for this session: its workspace uses emptyDir. Migration is not supported.',operation}),
+ listProviderAccounts:async()=>({Codex:[{id:'target',label:'Target account'}]}),
+ modelCatalog:async()=>({catalog:{models:[{id:'native-model',label:'Native model'}]}}),
+ previewProviderSwitch:async(id,selection)=>{calls.push({kind:'preview',selection});return {text:'Provider handover to Codex.\nOmitted: earlier native messages and resume files.\nInstructions:\n'+selection.handover.instructions+'\nTask:\n'+selection.handover.task,reviewHash:'review-hash',target:{...selection.target,credentialId:'target'},capacity:{windowTokens:100000,source:'native-minimum'},policy:'Approval mode and restrictions stay in place. Previous approvals are not transferred.'}},
+ startProviderSwitch:async(id,selection)=>{calls.push({kind:'start',selection});operation={request:{requestId:selection.requestId,target:selection.target},progress:{phase:'requested'}};return operation},
+ cancelProviderSwitch:async()=>{operation=null;return {available:true,operation:null}},
+ retryProviderSwitch:async()=>({available:false,operation})
+}
+window.proof={calls,enable:()=>{available=true},failAfterStop:()=>{operation={request:{requestId:'11111111-1111-4111-8111-111111111111',target:{agent:'Codex'}},progress:{phase:'target-started',error:'Replacement held; retry does not replay uncertain input.'}}}}
+createApp({components:{ProviderSwitch},setup(){return{session,client,pending:ref(false)}},template:'<header><span>Owner Workspace</span><ProviderSwitch :session="session" :client="client" @pending="pending=$event" /></header><main><label>Composer <input aria-label="Composer" :disabled="pending"></label><p v-if="pending" role="status">Input waits for the handover.</p></main>'}).mount('#app')
+</script></body></html>

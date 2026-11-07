@@ -128,7 +128,12 @@ public interface IUsageStore
 /// in, so monthly usage limits stay exact even when a session spans a month boundary.
 /// Independent NpgsqlDataSource, mirroring <see cref="ApiTokenStore"/>.
 /// </summary>
-public sealed class PostgresUsageStore : IUsageStore
+public interface IExecutionUsageStore
+{
+    Task AddReportedExecutionUsageAsync(string sessionId, string owner, long generation, string source, string billing, AgentUsageReport report, CancellationToken ct = default);
+}
+
+public sealed class PostgresUsageStore : IUsageStore, IExecutionUsageStore
 {
     private readonly NpgsqlDataSource _db;
 
@@ -175,6 +180,7 @@ public sealed class PostgresUsageStore : IUsageStore
             ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS reasoning_tokens BIGINT NOT NULL DEFAULT 0;
             ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS turns            BIGINT NOT NULL DEFAULT 0;
             -- The previous cumulative report of a session agent (AddReportedUsageAsync).
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS rep_generation BIGINT NOT NULL DEFAULT 0;
             ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS rep_input_tokens          BIGINT NOT NULL DEFAULT 0;
             ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS rep_output_tokens         BIGINT NOT NULL DEFAULT 0;
             ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS rep_cache_read_tokens     BIGINT NOT NULL DEFAULT 0;
@@ -267,9 +273,14 @@ public sealed class PostgresUsageStore : IUsageStore
         return true;
     }
 
-    public async Task AddReportedUsageAsync(string sessionId, string owner, string source, string billing,
+    public Task AddReportedUsageAsync(string sessionId, string owner, string source, string billing,
+        AgentUsageReport report, CancellationToken ct = default)
+        => AddReportedExecutionUsageAsync(sessionId, owner, 0, source, billing, report, ct);
+
+    public async Task AddReportedExecutionUsageAsync(string sessionId, string owner, long generation, string source, string billing,
         AgentUsageReport report, CancellationToken ct = default)
     {
+        if (generation < 0) throw new ArgumentException("Invalid execution generation.");
         await using var conn = await _db.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
 
@@ -286,15 +297,19 @@ public sealed class PostgresUsageStore : IUsageStore
         AgentUsageReport previous;
         await using (var read = new NpgsqlCommand("""
             SELECT rep_input_tokens, rep_output_tokens, rep_cache_read_tokens, rep_cache_creation_tokens,
-                   rep_reasoning_tokens, rep_turns, rep_cost_usd
+                   rep_reasoning_tokens, rep_turns, rep_cost_usd, rep_generation
             FROM session_usage WHERE session_id = @sid FOR UPDATE
             """, conn, tx))
         {
             read.Parameters.AddWithValue("sid", sessionId);
             await using var r = await read.ExecuteReaderAsync(ct);
             await r.ReadAsync(ct);
-            previous = new AgentUsageReport(r.GetInt64(0), r.GetInt64(1), r.GetInt64(2), r.GetInt64(3),
-                r.GetInt64(4), r.GetInt64(5), r.GetDouble(6));
+            if (r.GetInt64(7) > generation) throw new InvalidOperationException("Usage report belongs to a retired execution.");
+            // A larger first counter from a new execution must not subtract the old provider's
+            // totals. Native resume keeps its generation and retains ordinary deduplication.
+            previous = r.GetInt64(7) == generation
+                ? new AgentUsageReport(r.GetInt64(0), r.GetInt64(1), r.GetInt64(2), r.GetInt64(3), r.GetInt64(4), r.GetInt64(5), r.GetDouble(6))
+                : new AgentUsageReport(0, 0, 0, 0, 0, 0, 0);
         }
 
         var d = report.Since(previous);
@@ -314,6 +329,7 @@ public sealed class PostgresUsageStore : IUsageStore
                 cost_reported             = cost_reported OR @reported,
                 billing                   = @billing,
                 usage_source              = @source,
+                rep_generation            = @generation,
                 rep_input_tokens          = @rin,
                 rep_output_tokens         = @rout,
                 rep_cache_read_tokens     = @rcr,
@@ -345,6 +361,7 @@ public sealed class PostgresUsageStore : IUsageStore
             p.AddWithValue("reported", report.CostUsd is not null);
             p.AddWithValue("billing", billing);
             p.AddWithValue("source", source);
+            p.AddWithValue("generation", generation);
             p.AddWithValue("rin", report.InputTokens);
             p.AddWithValue("rout", report.OutputTokens);
             p.AddWithValue("rcr", report.CacheReadTokens);

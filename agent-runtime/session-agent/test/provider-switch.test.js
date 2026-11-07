@@ -25,6 +25,8 @@ test('target holds user input until native evidence and archive checkpoint, but 
   const h = createHarness({ ...env, AGENTHUB_PROVIDER_SWITCH_ID: requestId, AGENTHUB_PROMPT: prompt },
     { supportsProviderSwitch: true, turnHooks: true, findTranscript: () => file, nativeIdentity: () => 'native-one' },
     { files, now: () => clock });
+  const reservedShell = new FakeSocket(); h.runtime.webSocketServer.connect(reservedShell, '/shell');
+  assert.deepEqual(reservedShell.closed, [1013]);
   const socket = new FakeSocket(); h.runtime.webSocketServer.connect(socket, '/');
   socket.emit('message', JSON.stringify({ type: 'resize', cols: 120, rows: 36 }));
   socket.emit('message', JSON.stringify({ type: 'input', data: '\x1b[1;1R' }));
@@ -61,4 +63,21 @@ test('a target without a configured native archive cannot release its reservatio
     { supportsProviderSwitch: true, turnHooks: true, findTranscript: () => file, nativeIdentity: () => 'native-one' },
     { files: { [file]: JSON.stringify({ type: 'user', message: { role: 'user', content: 'handover' } }) + '\n' } });
   assert.equal((await route(h, 'release')).status, 409);
+});
+
+test('an open shell is a known workload that must close before source reservation', async () => {
+  const file = '/home/agent/.test-agent/conversation.jsonl';
+  let clock = 10_000;
+  const h = createHarness(env, { supportsProviderSwitch: true, turnHooks: true, findTranscript: () => file, nativeIdentity: () => 'native-one' },
+    { files: { [file]: '{"type":"user","message":{"role":"user","content":"source"}}\n' }, now: () => clock });
+  const agent = new FakeSocket(); h.runtime.webSocketServer.connect(agent, '/');
+  agent.emit('message', JSON.stringify({ type: 'resize', cols: 120, rows: 36 }));
+  clock = 11_000;
+  await requestHttp(h, 'POST', '/agenthub/turn', headers, JSON.stringify({ event: 'prompt' }), '127.0.0.1');
+  clock = 14_000;
+  await requestHttp(h, 'POST', '/agenthub/turn', headers, JSON.stringify({ event: 'stop' }), '127.0.0.1');
+  const shell = new FakeSocket(); h.runtime.webSocketServer.connect(shell, '/shell');
+  assert.equal((await route(h, 'prepare')).status, 409);
+  shell.emit('close');
+  assert.equal((await route(h, 'prepare')).status, 200);
 });

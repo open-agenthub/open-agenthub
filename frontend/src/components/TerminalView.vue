@@ -30,11 +30,14 @@ import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
 import { preferredUi } from '../lib/ui-preference.js'
 import SecretRequestBanner from './SecretRequestBanner.vue'
 import SessionModelSwitch from './workspace/SessionModelSwitch.vue'
+import ProviderSwitch from './workspace/ProviderSwitch.vue'
 import { busyReason } from '../lib/model-switch.js'
 
 const props = defineProps({ session: Object, sharedToken: { type: String, default: null }, initialUi: { type: String, default: null } })
 const runtimeUpdateError = ref('')
 const runtimeUpdating = ref(false)
+const providerPending = ref(false)
+const replacementPending = computed(() => providerPending.value || props.session.providerSwitchPending === true)
 const runtimeUpdateConfirmation = ref(false)
 async function updateRuntime() {
   runtimeUpdating.value = true
@@ -114,7 +117,7 @@ const agentTerminal = ref(null)
 const composer = ref(null)
 const transcriptError = ref('')
 const transcriptBusy = ref(false)
-const canTask = computed(() => capabilities.value.canWrite && isLive.value &&
+const canTask = computed(() => !replacementPending.value && capabilities.value.canWrite && isLive.value &&
   String(props.session?.mode).toLowerCase() === 'interactive')
 const canCompose = computed(() => canTask.value && statuses.agent === 'connected')
 watch(isChat, chat => { if (chat) activeTab.value = 'workspace' })
@@ -604,7 +607,8 @@ function interruptWorkspaceAgent() {
             :data-account-exhausted="isAccountExhausted(a) ? 'true' : null">{{ accountOptionLabel(a) }}{{ isAccountExhausted(a) ? ` (${accountLimitLabel(a)})` : '' }}</option>
         </select>
       </label>
-      <SessionModelSwitch v-if="!sharedToken" :session="session" :busy="modelSwitchBusy" @switched="emit('runtime-updated')" />
+      <ProviderSwitch v-if="capabilities.canManage && !sharedToken" :session="session" @updated="emit('runtime-updated')" @pending="providerPending = $event" />
+      <SessionModelSwitch v-if="!sharedToken && !replacementPending" :session="session" :busy="modelSwitchBusy" @switched="emit('runtime-updated')" />
       <button class="bar-btn" data-open-files @click="workspace?.openFiles()">Files</button>
       <button v-if="browserRunning" class="bar-btn" data-open-browser @click="workspace?.openBrowser()">Browser</button>
       <nav class="tabs">
@@ -759,6 +763,7 @@ function interruptWorkspaceAgent() {
     <SecretRequestBanner v-if="capabilities.canManage && !sharedToken" :session-id="session.id" />
     <SessionWorkspace ref="workspace" :session="session" :can-write="capabilities.canWrite" :can-manage="capabilities.canManage" :shared-token="sharedToken" @updated="emit('runtime-updated')">
       <div class="terminal-stack">
+        <div v-if="replacementPending" class="session-input-state" role="status">Provider replacement pending. Input waits for the reviewed handover to be confirmed.</div>
         <div v-if="stateWithheld && capabilities.canManage && !sharedToken" role="status" class="session-input-state" data-state-withheld>
           State not saved: sign-in data is present or its privacy check could not finish. New resume state will be saved when the check passes; restarting now may lose recent progress.
         </div>

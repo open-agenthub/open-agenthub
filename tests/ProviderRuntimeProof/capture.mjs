@@ -85,6 +85,14 @@ try {
     if (agent === 'claude') Object.assign(env, { ANTHROPIC_API_KEY: apiKey, ANTHROPIC_BASE_URL: modelUrl,
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1', AGENTHUB_CLAUDE_SESSION_ID: crypto.randomUUID() });
     else Object.assign(env, { CODEX_HOME: path.join(home, '.codex'), CODEX_API_KEY: apiKey });
+    if (agent === 'codex' && process.env.PROOF_NATIVE_DEFAULT === '1') {
+      fs.writeFileSync(path.join(home, '.codex/config.toml'), [
+        `openai_base_url = "${modelUrl}/v1"`, 'cli_auth_credentials_store = "file"', `[projects."${work}"]`, 'trust_level = "trusted"', ''
+      ].join('\n'));
+      fs.writeFileSync(path.join(home, '.codex/auth.json'), JSON.stringify({ OPENAI_API_KEY: apiKey }));
+      delete env.CODEX_API_KEY;
+
+    }
     const log = fs.openSync(path.join(root, 'server.log'), 'a');
     child = spawn(process.execPath, [path.join(repo, 'agent-runtime/session-agent/server.js')], { env, cwd: work, stdio: ['ignore', log, log] });
     const transcript = async () => {

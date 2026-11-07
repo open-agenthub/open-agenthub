@@ -19,8 +19,14 @@ specified scratch directory; never commit native transcripts, archives or logs.
 
 This is a target-side protocol proof, not an end-to-end provider switch. Source safe-point
 hooks, native account discovery/capacity admission, Kubernetes replacement, persistent volume
-mounts, real provider authentication and backend recovery require separate proofs. Codex uses
-a local custom model provider to make this transport test deterministic. Model replies and
+mounts, real provider authentication and backend recovery require separate proofs. By default Codex uses
+a local custom model provider to make this transport test deterministic. Set
+`PROOF_NATIVE_DEFAULT=1` to retain its built-in provider/default model and redirect only
+its native API base using the user-level `openai_base_url` setting. The pinned CLI ignores
+`OPENAI_BASE_URL`; verify the recorded destination rather than assuming that environment
+variable works. A hardcoded retired model opens a migration menu before any request, so
+the native-default scenario deliberately leaves the model unset. Neither recording model
+response supplies a context-window capability. Model replies and
 archive storage are stand-ins; both CLIs and the session transport are real.
 
 Run the runtime suite with `TMPDIR=/tmp` and `umask 022`: existing fixtures assert paths under

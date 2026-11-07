@@ -158,3 +158,55 @@ cannot atomically rotate registry authority; and automatically restarting a targ
 ambiguous create or handover, which can replay the owner's instructions. A durable phase is
 necessary but does not alone prove pod disappearance, safe-point admission or exact target
 delivery. Those remain responsibilities of the orchestrator and real-cluster proofs.
+
+## Replacement orchestration and reviewed input
+
+The owner reviews an exact handover and a digest bound to source generation/pod/claim,
+target account/model and effective session restrictions. The start route recomputes that
+review under the lifecycle lock. Reusing a request ID returns its admitted operation only
+with the same review digest. A shared reader or collaborator cannot resolve the owner-scoped
+registry row through these routes. Existing ephemeral sessions receive an explicit reason
+and no migration action.
+
+Reserve the registry before preparing the source. An exclusive execution fence drains
+in-flight callbacks before the pending flag changes; subsequent inbox pulls and pushes keep
+messages queued. The runtime requires a completed safe turn, quiet terminal, no draft/menu,
+no open shell and acknowledged native persistence. Helper containers must be stopped first.
+The source's checkpointed native conversation is retained with an explicit coverage omission
+note; it is not copied into target-native files. An unknown or busy state is refused instead
+of forcibly interrupting the agent.
+
+Before source stop and again before target admission, resolve the pinned target credential
+and capacity afresh. Source deletion uses its recorded UID. The replacement waits for every
+pod mounting the claim to disappear, including terminating or differently labelled consumers;
+RWO and a successful delete response alone are insufficient. Persist `target-starting` before
+create, annotate the target with request and generation, and reconcile only that pod. If an
+ambiguous start has no matching pod, hold the operation rather than create another target and
+replay input.
+
+Confirm actual native identity and require the first parsed target user turn to equal the
+reviewed handover. Checkpoint target native state and transcript before advancing history.
+A retry after history commit checks the same generation/native identity and uses idempotent
+runtime release. Only after release acknowledgement clear pending state. Cancellation is
+limited to a still-live, identical source before source-stop progress. Error text uses known
+local refusals or constant fallback text; provider response bodies and credential-bearing
+addresses are not reflected into the owner flow.
+
+Rejected: sending handover through the ordinary inbox after target startup, which could let
+a queued peer message become its first turn; and automatically retrying uncertain target
+creation or retyping, which could duplicate instructions. Initial target input is reserved,
+while terminal geometry and terminal query responses remain allowed so the native TUI can
+finish startup. Progress uses user-facing labels rather than exposing internal phase IDs.
+
+Native cumulative usage reports are scoped by execution generation. A new generation starts
+its comparison at zero even if its first counter exceeds the old execution's last counter;
+a report from a lower generation is rejected. Same-generation native resume keeps normal
+deduplication. Completed provider/account attribution also requires execution usage snapshots
+at the source cutoff; aggregate current-source labels alone cannot preserve that distinction.
+
+Archive signature decision: include mode directly alongside name/type/size/mtime/ctime.
+On a real filesystem, distinct permission changes can share one coarse ctime and collide
+under the previous signature. The maintained `ProviderRuntimeProof/signature-mode.mjs`
+negative control observes the same production metadata snapshots, demonstrates the old
+collision and verifies the mode-sensitive digest. Depending on ctime alone was rejected
+because a changed archive entry could otherwise be mistaken for unchanged state.

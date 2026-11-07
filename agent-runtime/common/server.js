@@ -216,6 +216,7 @@ function createCommonServer(options = {}) {
   let scrollback = '';
   let scrollbackDirectory = null;
   const clients = new Set();
+  const providerShells = new Set();
   let exited = false;
   let term;
   let chat;
@@ -2320,12 +2321,12 @@ function createCommonServer(options = {}) {
       if ((providerTargetRequest && !providerTargetReleased) || (providerSourceRequest && providerSourceRequest !== body.requestId))
         return fileError(response, 409, 'switch_already_pending');
       if (!providerSourceRequest) {
-        if (runtimeDraining || modelSwitching || !agentReady || exited || restartReason !== null || persisting || activityWaitingFor ||
+        if (runtimeDraining || modelSwitching || providerShells.size || !agentReady || exited || restartReason !== null || persisting || activityWaitingFor ||
             hubQuestionOpen || contextClear?.pending || modQueue.length || deferredMessages.length ||
             !nextTurn || !await nextTurn.canQuiesce(term, () => scrollback, lastSize))
           return fileError(response, 409, 'source_not_at_safe_point');
         // Rendering yields: another maintenance request may have reserved the terminal meanwhile.
-        if (runtimeDraining || modelSwitching || providerSourceRequest || contextClear?.pending)
+        if (runtimeDraining || modelSwitching || providerShells.size || providerSourceRequest || contextClear?.pending)
           return fileError(response, 409, 'source_not_at_safe_point');
         if (!statePut || stateWithheld || !providerNativeState().nativeId) return fileError(response, 409, 'source_archive_unavailable');
         providerSourceRequest = body.requestId; runtimeDraining = true; nextTurn.suspend(true); publishActivity();
@@ -2494,12 +2495,19 @@ function createCommonServer(options = {}) {
   }
 
   function handleShell(socket) {
+    if (providerSourceRequest || (providerTargetRequest && !providerTargetReleased)) {
+      safeSend(socket, '\r\n[agent] Provider replacement is pending; shell input is reserved.\r\n');
+      try { socket.close(1013); } catch {}
+      return;
+    }
+    providerShells.add(socket);
     let shell;
     try {
       shell = pty.spawn('bash', ['-l'], {
         name: 'xterm-256color', cols: 120, rows: 32, cwd, env
       });
     } catch (error) {
+      providerShells.delete(socket);
       safeSend(socket, '\r\n[agent] Failed to start shell: ' + (error && error.message) + '\r\n');
       try { socket.close(1011); } catch {}
       return;
@@ -2516,7 +2524,7 @@ function createCommonServer(options = {}) {
         try { shell.resize(message.cols, message.rows); } catch {}
       }
     });
-    const cleanup = () => { try { shell.kill(); } catch {} };
+    const cleanup = () => { providerShells.delete(socket); try { shell.kill(); } catch {} };
     socket.on('close', cleanup);
     socket.on('error', cleanup);
   }

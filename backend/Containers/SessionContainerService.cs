@@ -42,6 +42,7 @@ public sealed class SessionContainerService : ISessionContainerCleanup
     public async Task<ContainerInfo> RunAsync(SessionRecord session, ContainerRunRequest request, CancellationToken ct = default)
     {
         RequireEnabled();
+        if (session.ProviderSwitchPending) throw new ContainerRequestException("Provider replacement is pending; starting a helper is unavailable.");
         SessionContainerSpecFactory.Validate(request, _options);
         var asRoot = await EnsureNamespaceAsync(session, ct);
         var ns = SessionContainerSpecFactory.NamespaceName(_options, session.Id);
