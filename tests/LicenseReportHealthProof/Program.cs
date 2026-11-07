@@ -59,7 +59,7 @@ try {
     var initialExpiry = DateTime.UtcNow.AddDays(3); var initialToken = Token(initialExpiry); await store.SetTokenAsync(initialToken); await license.ReloadAsync();
     using var httpServices = new ServiceCollection().AddHttpClient().ConfigureHttpClientDefaults(b => b.ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(1))).BuildServiceProvider();
     var reporter = new SeatUsageReporter(license, store, users, httpServices.GetRequiredService<IHttpClientFactory>(), cfg, NullLogger<SeatUsageReporter>.Instance);
-    var hostBuilder = WebApplication.CreateBuilder(); hostBuilder.Logging.ClearProviders(); var apiPort = Port();
+    var hostBuilder = WebApplication.CreateBuilder(); hostBuilder.Logging.ClearProviders(); var apiPort = args.Contains("--serve") ? 8080 : Port();
     hostBuilder.WebHost.UseUrls($"http://127.0.0.1:{apiPort}");
     hostBuilder.Configuration.AddConfiguration(cfg);
     hostBuilder.Services.AddSingleton(store); hostBuilder.Services.AddSingleton(users);
@@ -80,6 +80,11 @@ try {
     var failed = await Overview();
     Check(failed.GetProperty("lastReportError").GetString()!.Contains("503"), "Missing HTTP failure");
     Check(!failed.ToString().Contains("private upstream"), "Leaked service response body");
+    if (args.Contains("--serve")) {
+        Console.WriteLine("Serving real failed-report state on port 8080 for the browser proof.");
+        await api.WaitForShutdownAsync();
+        return;
+    }
     // A fresh store and verifier model another replica/restart against the actual shared DB.
     var restartedStore = new LicenseStore(cfg); await restartedStore.InitializeAsync();
     Check((await restartedStore.GetReportErrorAsync()).Error!.Contains("503"), "Failure lost on restart");
