@@ -32,7 +32,9 @@ old. Reconnect/source changes therefore cannot reuse cursors against different p
 The existing Workspace renderer already renders boundary text. API/MCP plain-text consumers
 read the same stored composition; existing shared readers retain access checks and masking.
 
-The combined view is bounded to 5,000 entries and about one million characters. It explicitly
+Single-execution sessions (generation zero) return native entries unchanged and retain
+existing full-history paging, including histories over these combined-view limits.
+Only the multi-execution combined view is bounded to 5,000 entries and about one million characters. It explicitly
 marks omitted earlier entries; database rows and native archives are not removed by that
 view limit. A seal over the bound is refused, rather than silently discarding instructions.
 Step 2's checkpoint builder must select an explicitly marked bounded final segment before

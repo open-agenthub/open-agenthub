@@ -5,6 +5,8 @@ using AgentHub.Api.Services;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
 using Xunit;
+using k8s;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace AgentHub.Api.Tests;
 
@@ -44,6 +46,46 @@ public class SessionExecutionTests
         Assert.Contains("omitted", bounded[0].Text);
         Assert.Equal("entry 5999", bounded[^1].Text);
         Assert.True(bounded.Count <= 5001);
+    }
+
+    [Fact]
+    public async Task SingleExecutionRetainsUnboundedNativePagingPastCombinedViewLimits()
+    {
+        var config = new ConfigurationBuilder().Build();
+        var service = new KubernetesSessionService(config, null!, null!, null!, null!, null!, null!, null!, null!, null!,
+            null!, null!, NullLogger<KubernetesSessionService>.Instance,
+            cluster: new Kubernetes(new KubernetesClientConfiguration { Host = "http://127.0.0.1:1" }),
+            executions: new LegacyExecution());
+        var entries = Enumerable.Range(0, 12_000).Select(i => new TranscriptEntry("user", i + new string('x', 100), null)).ToArray();
+        Assert.True(entries.Sum(e => e.Text.Length) > PostgresSessionExecutionStore.MaxHistoryChars);
+        Assert.Same(entries, await service.ComposeExecutionHistoryAsync("alice", "s", entries));
+        var offset = 0;
+        while (offset < entries.Length)
+        {
+            var page = await SessionTranscripts.PageAsync(service, "alice", "s", "Running", offset, 500,
+                default, _ => Task.FromResult<IReadOnlyList<TranscriptEntry>?>(entries));
+            Assert.Equal(entries.Length, page.Length);
+            Assert.Equal(entries[offset], page.Entries[0]);
+            Assert.DoesNotContain(page.Entries, e => e.Role == "boundary");
+            Assert.True(page.NextOffset > offset);
+            offset = page.NextOffset;
+        }
+        Assert.Equal(entries.Length, offset);
+        var recent = await SessionTranscripts.PageAsync(service, "alice", "s", "Running", -1, 40,
+            default, _ => Task.FromResult<IReadOnlyList<TranscriptEntry>?>(entries));
+        Assert.Equal(entries[^1], recent.Entries[^1]);
+        Assert.Equal(11_960, recent.Offset);
+    }
+
+    private sealed class LegacyExecution : ISessionExecutionStore
+    {
+        public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task<ExecutionHistory?> ReadAsync(string owner, string id, CancellationToken ct = default) =>
+            Task.FromResult<ExecutionHistory?>(new(new(0, AgentKind.OpenCode, "native", null, "legacy", "legacy", false), [], false, ""));
+        public Task<SessionExecution?> EnsureLegacyAsync(string owner, string id, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task SaveTranscriptAsync(string owner, string id, long generation, string jsonl, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task AdvanceAsync(string owner, string id, long expectedGeneration, AgentKind agent, string nativeId,
+            string? credentialId, IReadOnlyList<TranscriptEntry> finalEntries, CancellationToken ct = default) => throw new NotSupportedException();
     }
 
     [PostgreSqlFact]
