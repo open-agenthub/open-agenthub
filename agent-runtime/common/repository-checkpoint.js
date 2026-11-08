@@ -154,7 +154,10 @@ async function inspectRepository(root, configured, index, credentialFile) {
         await git(verification, ['merge-base', '--is-ancestor', result.commit, result.remoteTip]);
         result.unpushed = 0;
       } catch {
-        result.unpushed = null;
+        try {
+          const count = Number((await git(directory, ['rev-list', '--count', result.commit, '--not', result.remoteTip])).trim());
+          result.unpushed = Number.isSafeInteger(count) && count > 0 ? count : null;
+        } catch { result.unpushed = null; }
         throw new Error('repository_commit_not_pushed');
       }
     } finally { await fs.rm(verification, { recursive: true, force: true }); }

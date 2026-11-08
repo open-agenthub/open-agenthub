@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import { deleteProofSession } from './delete.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 const require = createRequire('/tmp/provider-switch-tools/package.json');
@@ -298,7 +299,7 @@ try{
 
   }
   watcher.kill('SIGTERM');watcher=null;terminal.close();terminal=null;
-  await api('sessions/'+id,'DELETE',undefined,204);id=null;
+  await deleteProofSession(backendUrl,id,headers);id=null;
   if(claimName)await until(()=>{try{json('-n',ns,'get','pvc',claimName);return false;}catch{return true;}},'workspace cleanup');
  }
  console.log(process.env.PROOF_RECOVERY_SCOPE==='held'?'PASS: held credential/claim/checkpoint/target-loss cases against real native runtimes and storage/network policy.':'PASS: real backend + Postgres + object storage + kubelet + pinned CLIs, API-key and synthetic subscription Claude→Codex→Claude, both native model lists without supplied context-window metadata.');
@@ -310,6 +311,6 @@ try{
 }finally{
  await recovery?.close();
  await shell?.close();terminal?.close();watcher?.kill('SIGTERM');
- if(id){try{await api('sessions/'+id,'DELETE',undefined,204);}catch{console.error('Session cleanup held; inspect retained claim in the disposable cluster.');}}
+ if(id){try{await deleteProofSession(backendUrl,id,headers);}catch{console.error('Session cleanup held; inspect retained claim in the disposable cluster.');}}
  for(const name of proofSecrets){try{kubectl('-n',ns,'delete','secret',name);}catch{}}
 }

@@ -54,7 +54,7 @@ try {
   await fs.writeFile(path.join(repo, 'code.txt'), 'dirty\n');
   await git(repo, 'config', 'user.name', 'Proof'); await git(repo, 'config', 'user.email', 'proof@example.com');
   await git(repo, 'commit', '-qm', 'Unpublished proof change');
-  result = await check(); assert.equal(result.error, 'repository_commit_not_pushed');
+  result = await check(); assert.equal(result.error, 'repository_commit_not_pushed'); assert.equal(result.unpushed, 1);
   await git(repo, 'reset', '--hard', commit);
   await git(repo, 'checkout', '--detach', commit); result = await check(); assert.ok(result.error);
   await git(repo, 'checkout', 'work/proof');

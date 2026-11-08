@@ -93,8 +93,8 @@ observed remote tip. Refer to configured URLs and credential selections by exist
 never store embedded credentials, credential helpers or local remote configuration.
 Initial limits: 32 repositories, 64 KiB total serialized manifest, 1 KiB per relative path
 or branch/ref, 200 displayed outside-file names and 16 KiB total displayed names. Reject
-overflow rather than silently skipping a repository. Cap Git diagnostic capture at 8 KiB,
-status enumeration at 10,000 entries, and each network check at 60 seconds; exceeding a
+overflow rather than silently skipping a repository. Cap internal Git command output at 1 MiB (status paths need more than a short diagnostic);
+return only fixed error reasons, never raw diagnostics. Cap status enumeration at 10,000 entries, and each network check at 60 seconds; exceeding a
 bound yields an actionable refusal. These are new metadata/check limits, not a claim that
 existing native archive sizes are newly bounded. Do not enlarge existing archive contents,
 size policy or exclusions. Keep the existing 16,000-character handover limit.
