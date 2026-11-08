@@ -86,6 +86,84 @@ public sealed class AdminController : ControllerBase
             status.ValidUntil is { } stop && stop <= DateTime.UtcNow.AddDays(warningDays)));
     }
 
+    // A separate projection avoids loading user profiles or exporting future overview fields.
+    [HttpGet("diagnostics")]
+    public async Task<IActionResult> Diagnostics(CancellationToken ct)
+    {
+        if (!await IsAdminAsync(ct)) return Forbid();
+        await _license.ReloadAsync(ct);
+        var status = _license.Status;
+        var scripts = new List<object>();
+        var knownNames = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "AllowedAgentsStore",
+            "ApiTokenStore",
+            "ChatBindingStore",
+            "ChatLinkCodeStore",
+            "EphemeralApiMcpStore",
+            "LibraryShareStore",
+            "LicenseStore",
+            "McpClientStore",
+            "McpServerStore",
+            "McpSigningKeyStore",
+            "PermissionStore",
+            "PortGrantStore",
+            "PostgresBrowserLeaseStore",
+            "PostgresExecutionUsageSnapshots",
+            "PostgresKeyRepository",
+            "PostgresModelCatalogStore",
+            "PostgresProjectStore",
+            "PostgresProviderSwitchStore",
+            "PostgresSecretRequestStore",
+            "PostgresSessionExecutionStore",
+            "PostgresSessionFileRegistry",
+            "PostgresSessionMessageStore",
+            "PostgresSessionOrderStore",
+            "PostgresSessionStore",
+            "PostgresSessionTransferTicketStore",
+            "PostgresSessionWorkspaceStore",
+            "PostgresUsageStore",
+            "PostgresWebhookTriggerStore",
+            "SessionShareStore",
+            "SingleUserOwnerStore",
+            "SkillEmbeddingStore",
+            "SkillStore",
+            "SlackThreadStore",
+            "UsageLimitStore",
+            "UserDirectory",
+            "UserGroupStore",
+            "UserRoleStore",
+        };
+        await using var connection = await PostgresDataSources.Shared(_cfg).OpenConnectionAsync(ct);
+        await using var command = new Npgsql.NpgsqlCommand(
+            "SELECT name, applied_at FROM schema_scripts ORDER BY name", connection);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var name = reader.GetString(0);
+            // Unknown database rows must not become a channel for customer content.
+            if (knownNames.Contains(name))
+                scripts.Add(new { name, appliedAt = reader.GetDateTime(1) });
+        }
+        return Ok(new
+        {
+            schemaScripts = scripts,
+            license = new
+            {
+                edition = _license.Enabled ? "enterprise" : "community",
+                valid = status.Valid, present = status.Present,
+                expiresAt = status.ValidUntil, seats = status.Seats,
+                usedSeats = await _dir.CountLicensedAsync(ct)
+            },
+            oidc = new
+            {
+                authorityPresent = !string.IsNullOrWhiteSpace(_cfg["Oidc:Authority"]),
+                clientIdPresent = !string.IsNullOrWhiteSpace(_cfg["Oidc:ClientId"]),
+                audiencePresent = !string.IsNullOrWhiteSpace(_cfg["Oidc:Audience"])
+            }
+        });
+    }
+
     public sealed record CheckoutReq(string Email, string Org, int Seats, string? ReturnUrl);
 
     /// <summary>
