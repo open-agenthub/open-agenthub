@@ -14,6 +14,8 @@ function newRequestId() {
   const hex = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('')
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
+const repositories = ref(null), acknowledgeOmissions = ref(false), repairMessage = ref('')
+const repositoryReady = computed(() => repositories.value?.repositories?.length && repositories.value.repositories.every(item => !item.error))
 const requestId = ref(newRequestId())
 const target = computed(() => props.session.agent === 'Claude' ? 'Codex' : 'Claude')
 const operation = computed(() => status.value?.operation)
@@ -49,11 +51,38 @@ async function loadCatalog() {
   } catch { /* Admission reports missing capacity; a native default still has its conservative floor. */ }
 }
 function selection() {
-  return { requestId: requestId.value,
+  return { requestId: requestId.value, acknowledgeOmissions: acknowledgeOmissions.value, repositoryHash: repositories.value?.reviewHash || null,
     target: { agent: target.value, authMode: auth.value, credentialId: auth.value === 'Subscription' ? credential.value || null : null,
       modelEndpointUrl: auth.value === 'CustomEndpoint' ? endpoint.value.trim() : null, modelName: model.value || null },
     handover: { target: target.value, instructions: instructions.value, task: task.value, decisions: decisions.value,
       pendingWork: pendingWork.value, references: references.value.split('\n').map(value => value.trim()).filter(Boolean) } }
+}
+const repositoryReasons = {
+  repository_work_not_saved: 'Commit intended tracked changes and non-ignored untracked files, then push.',
+  repository_commit_not_pushed: 'The exact commit is not available on the remote branch. Push it, then check again.',
+  repository_remote_changed: 'The remote differs from the session repository. Restore the configured remote.',
+  repository_upstream_required: 'Set an upstream branch on the configured remote.',
+  repository_submodules_unsupported: 'Submodules are not supported for this switch.',
+  repository_large_files_unsupported: 'Large-file filters are not supported for this switch.',
+  repository_check_failed: 'Check the remote, fetch credentials and attached branch, then try again.'
+}
+async function checkRepositories() {
+  busy.value = true; error.value = ''; review.value = null; acknowledgeOmissions.value = false
+  try { repositories.value = await props.client.providerSwitchRepositories(props.session.id) }
+  catch (failure) { repositories.value = null; error.value = failure.message || 'Could not check repositories.' }
+  finally { busy.value = false }
+}
+function prepareRepair() {
+  const branch = `work/session-${props.session.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 12)}`
+  repairMessage.value = `Please prepare the repositories for a provider switch. Review changes for credentials and unintended files. Commit only intended work on a task branch (proposed: ${branch}; choose a fresh name if it exists), then push and set its upstream. Do not force push. Do not commit or push directly to main or the remote default branch without asking me for explicit confirmation. Resolve remaining tracked changes and non-ignored untracked files. Ignored dependencies, build outputs and .env files do not carry over and do not need to be committed. Tell me when the commits are available remotely so I can check again.`
+}
+async function sendRepair() {
+  busy.value = true; error.value = ''; review.value = null; repositories.value = null; acknowledgeOmissions.value = false
+  try {
+    await props.client.sendSessionMessage(props.session.id, { body: repairMessage.value })
+    repairMessage.value = ''
+  } catch (failure) { error.value = failure.message || 'Could not send the request.' }
+  finally { busy.value = false }
 }
 async function preview() {
   busy.value = true; error.value = ''; review.value = null
@@ -107,7 +136,7 @@ onBeforeUnmount(() => { disposed = true; catalogGeneration++; clearInterval(time
       <p v-if="error" role="alert">{{ error }}</p>
       <template v-if="active">
         <p role="status">Switching to {{ operation.request.target.agent }}: {{ phaseLabel }}.</p>
-        <p>The workspace and visible conversation stay with this session. Input waits until the reviewed handover is confirmed.</p>
+        <p>The visible conversation stays with this session. The new agent restores its recorded code and waits to release input until the reviewed handover is confirmed.</p>
         <p v-if="operation.progress.error" role="alert">{{ operation.progress.error }}</p>
         <button v-if="operation.progress.error" type="button" class="bar-btn" :disabled="busy" @click="act('retryProviderSwitch')">Retry this replacement</button>
         <button v-if="canCancel" type="button" class="bar-btn" :disabled="busy" @click="act('cancelProviderSwitch')">Cancel before source stop</button>
@@ -116,7 +145,31 @@ onBeforeUnmount(() => { disposed = true; catalogGeneration++; clearInterval(time
       </template>
       <template v-else-if="status?.available">
         <h3>Continue with {{ target }}</h3>
-        <p>Your repositories and files stay on this session's volume. {{ target }} starts fresh native context with only the text you review below. Earlier messages remain visible.</p>
+        <p v-if="!status.repositoryBacked">Your repositories and files stay on this session's volume. {{ target }} starts fresh native context with only the text you review below. Earlier messages remain visible.</p>
+        <div v-if="status.repositoryBacked">
+          <p>Code is restored from the commits shown below. Save and push repository work before switching. Ignored files and files outside repositories will not carry over. The new agent must recreate dependencies (for example, run npm install) and build outputs. .env files do not carry over. Running processes stop. Only your reviewed handover enters fresh native context; earlier messages remain visible.</p>
+          <button type="button" class="bar-btn" :disabled="busy" @click="checkRepositories">Check again</button>
+          <div v-if="repositories" data-repository-checks>
+            <div v-for="item in repositories.repositories" :key="item.index">
+              <p><strong>{{ item.destination }}</strong>: {{ item.error ? (repositoryReasons[item.error] || 'This checkout cannot be restored. Check its layout and Git access.') : 'Ready' }}</p>
+              <p>Branch: {{ item.branch || 'unknown' }}. Commit: {{ item.commit || 'unknown' }}.</p>
+              <p>Uncommitted tracked changes: {{ item.trackedChanges ?? 'unknown' }}. Non-ignored untracked files: {{ item.untracked ?? 'unknown' }}. Unpushed commits: {{ item.unpushed ?? 'unknown' }}.</p>
+              <p v-if="item.ignored">Ignored files will not carry over: {{ item.ignored.count }}.</p>
+              <ul v-if="item.ignored?.names?.length"><li v-for="name in item.ignored.names" :key="name">{{ name }}</li></ul>
+              <p v-if="item.ignored?.omitted">{{ item.ignored.omitted }} more names omitted.</p>
+            </div>
+            <p>Files outside repositories will not carry over: {{ repositories.outside.count }}.</p>
+            <ul v-if="repositories.outside.names.length"><li v-for="name in repositories.outside.names" :key="name">{{ name }}</li></ul>
+            <p v-if="repositories.outside.omitted">{{ repositories.outside.omitted }} more names omitted.</p>
+            <label><input v-model="acknowledgeOmissions" type="checkbox" :disabled="busy">I understand that ignored files and files outside repositories will not carry over, and dependencies must be recreated.</label>
+            <button v-if="!repositoryReady" type="button" class="bar-btn" :disabled="busy" @click="prepareRepair">Ask the agent to commit and push</button>
+          </div>
+          <div v-if="repairMessage">
+            <label>Message to the source agent<textarea v-model="repairMessage" :disabled="busy" maxlength="4000" /></label>
+            <button type="button" class="bar-btn" :disabled="busy" @click="sendRepair">Send this request</button>
+            <p>Wait for the source turn to finish, then check again and review the handover. Sending this request does not approve a switch.</p>
+          </div>
+        </div>
         <form @submit.prevent="preview">
           <label>Target sign-in<select v-model="auth" :disabled="busy"><option>Subscription</option><option value="ApiKey">API key</option><option value="CustomEndpoint">Custom endpoint</option></select></label>
           <label v-if="auth === 'Subscription'">Target account<select v-model="credential" :disabled="busy"><option value="">Current available default</option><option v-for="account in choices" :key="account.id" :value="account.id">{{ account.label || account.id }}</option></select></label>
@@ -128,7 +181,7 @@ onBeforeUnmount(() => { disposed = true; catalogGeneration++; clearInterval(time
           <label>Decisions<textarea v-model="decisions" :disabled="busy" maxlength="16000" /></label>
           <label>Pending work and questions<textarea v-model="pendingWork" :disabled="busy" maxlength="16000" /></label>
           <label>References, one per line<textarea v-model="references" :disabled="busy" maxlength="16000" /></label>
-          <button type="submit" class="bar-btn" :disabled="busy">Review exact handover</button>
+          <button type="submit" class="bar-btn" :disabled="busy || (status.repositoryBacked && (!repositoryReady || !acknowledgeOmissions))">Review exact handover</button>
         </form>
         <div v-if="review" data-provider-review>
           <p>{{ review.policy }}</p>
@@ -156,6 +209,7 @@ onBeforeUnmount(() => { disposed = true; catalogGeneration++; clearInterval(time
 .provider-panel { box-sizing: border-box; position: absolute; z-index: 30; inset: 100% 12px auto auto; width: min(600px, calc(100vw - 32px)); max-height: 75vh; overflow: auto; padding: 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); box-shadow: 0 8px 32px #0008; }
 label { display: grid; gap: 5px; margin: 12px 0; }
 input, select, textarea { box-sizing: border-box; width: 100%; color: var(--text); background: var(--bg); border: 1px solid var(--border); padding: 8px; border-radius: 5px; }
+input[type="checkbox"] { width: auto; }
 textarea { min-height: 70px; resize: vertical; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--border); padding: 12px; font: inherit; }
 p { overflow-wrap: anywhere; }

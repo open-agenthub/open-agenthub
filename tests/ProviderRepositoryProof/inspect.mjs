@@ -12,7 +12,11 @@ const source = path.join(root, 'source'), bare = path.join(root, 'remote.git'), 
 await fs.mkdir(source); await fs.mkdir(workspace);
 const exec = promisify(execFile);
 const git = async (cwd, ...args) => (await exec('git', args, { cwd, encoding: 'utf8' })).stdout.trim();
+let requireAuth = false;
 const server = http.createServer(async (request, response) => {
+  if (requireAuth && request.headers.authorization !== 'Basic ' + Buffer.from('proof:synthetic-fetch').toString('base64')) {
+    response.writeHead(401, { 'www-authenticate': 'Basic realm="proof"' }).end(); return;
+  }
   // A read-only dumb HTTP remote proves fetchability needs no receive-pack permission.
   const name = new URL(request.url, 'http://example.com').pathname;
   const file = path.resolve(bare, '.' + name);
@@ -50,6 +54,16 @@ try {
   await git(repo, 'reset', '--hard', commit);
   await git(repo, 'checkout', '--detach', commit); result = await check(); assert.ok(result.error);
   await git(repo, 'checkout', 'work/proof');
+  requireAuth = true;
+  assert.equal((await check()).error, 'repository_check_failed');
+  const credentials = url.replace('http://', 'http://proof:synthetic-fetch@') + '\n';
+  const authenticated = await inspect(workspace, configured, credentials);
+  assert.equal(authenticated.repositories[0].error, null);
+  assert(!JSON.stringify(authenticated).includes('synthetic-fetch'));
+  await git(repo, 'update-index', '--assume-unchanged', 'code.txt');
+  result = (await inspect(workspace, configured, credentials)).repositories[0];
+  assert.equal(result.error, 'repository_index_flags_unsupported');
+  await git(repo, 'update-index', '--no-assume-unchanged', 'code.txt');
   await git(repo, 'remote', 'remove', 'origin'); result = await check(); assert.ok(result.error);
   assert.equal((await inspect(workspace, [{ destination: '../escape', url }]).catch(error => error)).message, 'repository_path_invalid');
   console.log('PASS: real read-only HTTP Git, exact commit/branch, ignored files allowed without content, tracked/staged/untracked/unpublished/detached/missing-remote/path refusals.');

@@ -143,6 +143,7 @@ export const api = {
   refreshModelCatalog: query => req('POST', `/model-catalog/refresh?${new URLSearchParams(query)}`),
   sessionModels: (id, refresh = false) => req('GET', `/sessions/${encodeURIComponent(id)}/models${refresh ? '?refresh=true' : ''}`),
   switchSessionModel,
+  providerSwitchRepositories: id => req('POST', `/sessions/${encodeURIComponent(id)}/provider-switch/repositories`),
   providerSwitchStatus: id => req('GET', `/sessions/${encodeURIComponent(id)}/provider-switch`),
   previewProviderSwitch: (id, data) => req('POST', `/sessions/${encodeURIComponent(id)}/provider-switch/preview`, data),
   startProviderSwitch: (id, data) => req('POST', `/sessions/${encodeURIComponent(id)}/provider-switch`, data),

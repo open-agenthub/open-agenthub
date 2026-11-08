@@ -3,17 +3,19 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
-const { execFile } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
 const LIMITS = Object.freeze({ repositories: 32, manifestBytes: 65536, pathBytes: 1024,
   entries: 10000, names: 200, namesBytes: 16384, outputBytes: 1024 * 1024, networkMs: 60000 });
 
-function git(cwd, args) {
+function git(cwd, args, credentialFile = null) {
   return new Promise((resolve, reject) => execFile('git', ['--no-optional-locks',
     '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
-    '-c', 'protocol.file.allow=never', '-c', 'protocol.ext.allow=never', ...args], {
+    '-c', 'protocol.file.allow=never', '-c', 'protocol.ext.allow=never',
+    '-c', 'credential.helper=',
+    ...(credentialFile ? ['-c', `credential.helper=store --file=${credentialFile}`] : []), ...args], {
     cwd, timeout: LIMITS.networkMs, maxBuffer: LIMITS.outputBytes, encoding: 'utf8',
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1',
-      GIT_CONFIG_COUNT: '0', GIT_EXTERNAL_DIFF: '', GIT_PAGER: 'cat' }
+      GIT_CONFIG_COUNT: '0', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_PARAMETERS: '', GIT_EXTERNAL_DIFF: '', GIT_PAGER: 'cat' }
   }, (error, stdout) => error ? reject(new Error('repository_check_failed')) : resolve(stdout)));
 }
 function names(raw) {
@@ -47,7 +49,39 @@ function remote(value) {
   return value;
 }
 
-async function inspectRepository(root, configured, index) {
+async function ignoredFiles(directory) {
+  return new Promise((resolve, reject) => {
+    const child = spawn('git', ['--no-optional-locks', '-c', 'core.fsmonitor=false',
+      'ls-files', '--others', '--ignored', '--exclude-standard', '-z'], {
+      cwd: directory, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, GIT_CONFIG_COUNT: '0' }
+    });
+    let pending = '', count = 0, bytes = 0, failed = false;
+    const retained = [];
+    const timer = setTimeout(() => { failed = true; child.kill(); }, LIMITS.networkMs);
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', chunk => {
+      pending += chunk;
+      let end;
+      while ((end = pending.indexOf('\0')) !== -1) {
+        const name = pending.slice(0, end); pending = pending.slice(end + 1);
+        if (!name) continue;
+        count++;
+        const size = Buffer.byteLength(name);
+        if (retained.length < 8 && bytes + size <= LIMITS.namesBytes) { retained.push(name); bytes += size; }
+      }
+      // Stream counts instead of buffering node_modules. Only a malformed single path is bounded here.
+      if (pending.length > 65536) { failed = true; child.kill(); }
+    });
+    child.on('error', () => { failed = true; });
+    child.on('close', code => {
+      clearTimeout(timer);
+      if (failed || code !== 0 || pending) reject(new Error('repository_check_failed'));
+      else resolve({ count, names: retained, omitted: count - retained.length });
+    });
+  });
+}
+
+async function inspectRepository(root, configured, index, credentialFile) {
   const destination = relative(configured.destination);
   const result = { index, destination, branch: null, commit: null, remoteBranch: null,
     remoteTip: null, trackedChanges: null, untracked: null, ignored: null, unpushed: null, error: null };
@@ -64,8 +98,11 @@ async function inspectRepository(root, configured, index) {
     if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(result.commit)) throw new Error('repository_commit_invalid');
     const tracked = names(await git(directory, ['diff', '--name-only', '-z', '--no-ext-diff', 'HEAD', '--']));
     const untracked = names(await git(directory, ['ls-files', '--others', '--exclude-standard', '-z']));
-    const ignored = names(await git(directory, ['ls-files', '--others', '--ignored', '--exclude-standard', '-z']));
-    result.trackedChanges = tracked.length; result.untracked = untracked.length; result.ignored = sample(ignored);
+    const ignored = await ignoredFiles(directory);
+    result.trackedChanges = tracked.length; result.untracked = untracked.length; result.ignored = ignored;
+    const flags = names(await git(directory, ['ls-files', '-v', '-z']));
+    if (flags.some(value => value.startsWith('S ') || /^[a-z] /.test(value)))
+      throw new Error('repository_index_flags_unsupported');
     const files = names(await git(directory, ['ls-files', '-z']));
     if (files.some(name => name === '.gitmodules' || name.endsWith('/.gitmodules')))
       throw new Error('repository_submodules_unsupported');
@@ -91,7 +128,7 @@ async function inspectRepository(root, configured, index) {
     try {
       await git(verification, ['init', '--bare', '.']);
       // A separate object database avoids trusting stale local remote refs or local objects.
-      await git(verification, ['fetch', '--no-tags', '--', configuredUrl, result.remoteBranch]);
+      await git(verification, ['fetch', '--no-tags', '--', configuredUrl, result.remoteBranch], credentialFile);
       result.remoteTip = (await git(verification, ['rev-parse', '--verify', 'FETCH_HEAD^{commit}'])).trim();
       try {
         await git(verification, ['merge-base', '--is-ancestor', result.commit, result.remoteTip]);
@@ -107,7 +144,7 @@ async function inspectRepository(root, configured, index) {
   return result;
 }
 
-async function inspect(root, configured) {
+async function inspect(root, configured, credentials = '') {
   root = await fs.realpath(root);
   if (!Array.isArray(configured) || configured.length === 0 || configured.length > LIMITS.repositories)
     throw new Error('repository_count_invalid');
@@ -115,11 +152,31 @@ async function inspect(root, configured) {
   if (new Set(destinations).size !== destinations.length
       || destinations.some(a => destinations.some(b => a !== b && a.startsWith(b + '/'))))
     throw new Error('repository_layout_unsupported');
-  const repositories = [];
-  for (let index = 0; index < configured.length; index++) repositories.push(await inspectRepository(root, configured[index], index));
-  const result = { version: 1, strategy: 'repository', repositories };
-  if (Buffer.byteLength(JSON.stringify(result)) > LIMITS.manifestBytes) throw new Error('repository_manifest_limit');
-  return result;
+  const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'repo-credentials-'));
+  try {
+    const credentialFile = path.join(scratch, 'store');
+    if (typeof credentials !== 'string' || Buffer.byteLength(credentials) > 262144) throw new Error('repository_credentials_invalid');
+    await fs.writeFile(credentialFile, credentials, { mode: 0o600 });
+    const repositories = [];
+    for (let index = 0; index < configured.length; index++) repositories.push(await inspectRepository(root, configured[index], index, credentialFile));
+    const outside = [];
+    let visited = 0;
+    async function walk(directory) {
+      if (++visited > LIMITS.entries) throw new Error('repository_entry_limit');
+      for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+        const name = path.relative(root, path.join(directory, entry.name));
+        if (destinations.includes(name)) continue;
+        if (++visited > LIMITS.entries) throw new Error('repository_entry_limit');
+        if (entry.name === '.git') throw new Error('repository_layout_unsupported');
+        if (entry.isDirectory()) await walk(path.join(directory, entry.name));
+        else outside.push(name);
+      }
+    }
+    await walk(root);
+    const result = { version: 1, strategy: 'repository', repositories, outside: sample(outside) };
+    if (Buffer.byteLength(JSON.stringify(result)) > LIMITS.manifestBytes) throw new Error('repository_manifest_limit');
+    return result;
+  } finally { await fs.rm(scratch, { recursive: true, force: true }); }
 }
 
 module.exports = { inspect, LIMITS };

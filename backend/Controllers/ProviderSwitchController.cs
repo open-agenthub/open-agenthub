@@ -28,6 +28,10 @@ public sealed class ProviderSwitchController(ISessionService sessions) : Control
     public Task<IActionResult> Status(string id, CancellationToken ct) =>
         Execute(async service => await service.ProviderSwitchStatusAsync(Owner, id, ct));
 
+    [HttpPost("repositories")]
+    public Task<IActionResult> Repositories(string id, CancellationToken ct) =>
+        Execute(async service => await service.InspectProviderRepositoriesAsync(Owner, id, ct));
+
     [HttpPost("preview")]
     [RequestSizeLimit(80_000)]
     public Task<IActionResult> Preview(string id, ProviderSwitchSelection selection, CancellationToken ct) =>

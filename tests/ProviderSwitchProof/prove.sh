@@ -71,7 +71,10 @@ spec:
       ports: [{protocol: TCP, port: 8080}, {protocol: TCP, port: 8443}]
 YAML
 kubectl -n agenthub rollout status deployment/provider-switch-model --timeout=120s
-kubectl -n agenthub set env deployment/agenthub-backend AgentHub__WorkspaceVolumePersistent=true \
+proof_persistent=true
+if [ "${PROOF_REPOSITORY:-0}" = 1 ]; then proof_persistent=false; fi
+kubectl -n agenthub set env deployment/agenthub-backend "AgentHub__WorkspaceVolumePersistent=$proof_persistent" \
+  "AgentHub__RepositoryProviderSwitchEnabled=$([ "${PROOF_REPOSITORY:-0}" = 1 ] && echo true || echo false)" \
   AgentHub__WorkspaceVolumeSize=256Mi AgentHub__ClaudeAgentImage=example.com/provider-switch-claude:local \
   AgentHub__CodexAgentImage=example.com/provider-switch-codex:local AgentHub__AgentImagePullPolicy=IfNotPresent
 kubectl -n agenthub rollout status deployment/agenthub-backend --timeout=180s

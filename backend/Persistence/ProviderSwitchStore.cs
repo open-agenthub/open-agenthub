@@ -10,14 +10,17 @@ namespace AgentHub.Api.Persistence;
 public sealed record ProviderSwitchTarget(AgentKind Agent, AgentAuthMode AuthMode, string? CredentialId,
     string? ModelEndpointUrl, string? ModelName);
 public sealed record ProviderSwitchRequest(Guid RequestId, string SessionId, long SourceGeneration,
-    AgentKind SourceAgent, string SourcePodUid, string ClaimUid, ProviderSwitchTarget Target, string Handover, string? ReviewHash = null);
+    AgentKind SourceAgent, string SourcePodUid, string? ClaimUid, ProviderSwitchTarget Target, string Handover, string? ReviewHash = null,
+    RepositoryCheckpoint? Repositories = null);
 public sealed record ProviderSwitchProgress(string Phase, string? TargetPodUid = null,
-    string? SourceNativeId = null, IReadOnlyList<TranscriptEntry>? SourceEntries = null, string? Error = null, string? TargetNativeId = null, bool SourceStopAcknowledged = false);
+    string? SourceNativeId = null, IReadOnlyList<TranscriptEntry>? SourceEntries = null, string? Error = null, string? TargetNativeId = null, bool SourceStopAcknowledged = false, bool RepositoryStopVerified = false);
 public sealed record ProviderSwitchOperation(ProviderSwitchRequest Request, ProviderSwitchProgress Progress);
 
 public interface IProviderSwitchStore
 {
     Task InitializeAsync(CancellationToken ct = default);
+    Task<RepositoryCheckpoint?> RepositoryCheckpointAsync(string owner, string id, long generation, CancellationToken ct = default)
+        => Task.FromResult<RepositoryCheckpoint?>(null);
     Task CreateAsync(string owner, ProviderSwitchRequest request, CancellationToken ct = default);
     Task<ProviderSwitchOperation?> GetAsync(string owner, string id, CancellationToken ct = default);
     Task<bool> CanConsumeInboxAsync(string owner, string id, long generation, CancellationToken ct = default);
@@ -48,16 +51,17 @@ public sealed class PostgresProviderSwitchStore(IConfiguration configuration, IE
     public async Task CreateAsync(string owner, ProviderSwitchRequest request, CancellationToken ct = default)
     {
         if (request.RequestId == Guid.Empty || request.SourceGeneration < 0 || request.Handover.Length is 0 or > 16000
-            || string.IsNullOrEmpty(request.SourcePodUid) || string.IsNullOrEmpty(request.ClaimUid)
+            || string.IsNullOrEmpty(request.SourcePodUid) || (string.IsNullOrEmpty(request.ClaimUid) == (request.Repositories is null))
             || request.SourceAgent is not (AgentKind.Claude or AgentKind.Codex)
             || request.Target.Agent is not (AgentKind.Claude or AgentKind.Codex) || request.SourceAgent == request.Target.Agent)
             throw new ArgumentException("Invalid provider replacement request.");
+        request.Repositories?.Validate();
         AgentConfiguration.ValidateForCreate(request.Target.Agent, request.Target.AuthMode);
         await using var admission = await fence.WriteAsync(request.SessionId, ct);
         // Lock the registry before admission so two owners' requests cannot both observe it idle.
         await using var command = _db.CreateCommand("""
             WITH owned AS (
-                SELECT id FROM sessions WHERE id=@id AND owner=@owner AND workspace_persistent
+                SELECT id FROM sessions WHERE id=@id AND owner=@owner AND workspace_persistent=@persistent
                     AND NOT provider_switch_pending AND execution_generation=@generation FOR UPDATE
             ), admitted AS (
                 INSERT INTO session_provider_switches(session_id,request_id,request,progress,phase)
@@ -66,6 +70,7 @@ public sealed class PostgresProviderSwitchStore(IConfiguration configuration, IE
             ) UPDATE sessions SET provider_switch_pending=TRUE WHERE id IN (SELECT session_id FROM admitted)
             """);
         Identity(command, owner, request.SessionId, request.RequestId);
+        command.Parameters.AddWithValue("persistent", request.Repositories is null);
         command.Parameters.AddWithValue("generation", request.SourceGeneration);
         command.Parameters.AddWithValue("request", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(request, Json));
         command.Parameters.AddWithValue("progress", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(new ProviderSwitchProgress("requested"), Json));
@@ -82,6 +87,22 @@ public sealed class PostgresProviderSwitchStore(IConfiguration configuration, IE
         await using var reader = await command.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct) ? new(JsonSerializer.Deserialize<ProviderSwitchRequest>(reader.GetString(0), Json)!,
             JsonSerializer.Deserialize<ProviderSwitchProgress>(reader.GetString(1), Json)!) : null;
+    }
+
+    public async Task<RepositoryCheckpoint?> RepositoryCheckpointAsync(string owner, string id, long generation, CancellationToken ct = default)
+    {
+        await using var command = _db.CreateCommand("""
+            SELECT p.request->'repositories' FROM session_provider_switches p JOIN sessions s ON s.id=p.session_id
+            WHERE s.owner=@owner AND s.id=@id AND (p.request->>'sourceGeneration')::bigint+1=@generation
+                AND p.phase NOT IN ('requested','prepared','stopping','source-stopped','cancelling','cancelled')
+            ORDER BY p.updated_at DESC LIMIT 1
+            """);
+        command.Parameters.AddWithValue("owner", owner); command.Parameters.AddWithValue("id", id);
+        command.Parameters.AddWithValue("generation", generation);
+        var raw = await command.ExecuteScalarAsync(ct);
+        var manifest = raw is string text ? JsonSerializer.Deserialize<RepositoryCheckpoint>(text, Json) : null;
+        manifest?.Validate();
+        return manifest;
     }
 
     public async Task<IReadOnlyList<(string Owner, string SessionId)>> PendingAsync(CancellationToken ct = default)
@@ -122,6 +143,8 @@ public sealed class PostgresProviderSwitchStore(IConfiguration configuration, IE
             WITH moved AS (
                 UPDATE session_provider_switches p SET progress=@progress,phase=@next,updated_at=now() FROM sessions s
                 WHERE p.session_id=s.id AND s.owner=@owner AND s.id=@id AND p.request_id=@requestId AND p.phase=@expected
+                    AND (@next <> 'source-stopped' OR p.request->'repositories' IS NULL
+                        OR p.request->'repositories'='null'::jsonb OR (@progress->>'repositoryStopVerified')::boolean)
                 RETURNING p.session_id
             ) UPDATE sessions SET provider_switch_pending=(@next NOT IN ('completed','cancelled')),
                 agent_session_id=CASE WHEN @next='committing' THEN @native ELSE agent_session_id END
@@ -155,7 +178,7 @@ public sealed class PostgresProviderSwitchStore(IConfiguration configuration, IE
         await using (var read = new NpgsqlCommand("""
             SELECT p.request::text,p.progress::text FROM session_provider_switches p JOIN sessions s ON s.id=p.session_id
             WHERE s.id=@id AND s.owner=@owner AND p.request_id=@requestId AND p.phase='source-stopped'
-                AND s.provider_switch_pending AND s.workspace_persistent FOR UPDATE OF s,p
+                AND s.provider_switch_pending FOR UPDATE OF s,p
             """, connection, transaction))
         {
             Identity(read, owner, id, requestId);

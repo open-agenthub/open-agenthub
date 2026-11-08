@@ -11,6 +11,7 @@ const key = Buffer.from(json('-n',control,'get','secret','agenthub-api-key').dat
 const headers = {Authorization:'Bearer '+key,'Content-Type':'application/json'};
 const sleep = ms => new Promise(resolve=>setTimeout(resolve,ms));
 const backendUrl=process.env.PROOF_BACKEND_URL||'http://127.0.0.1:18880';
+const repositoryMode = process.env.PROOF_REPOSITORY === '1';
 let recovery=null;
 async function until(fn, description, attempts=process.env.PROOF_RECOVERY==='1'?2400:600) {
  let error;
@@ -103,17 +104,22 @@ try{
   terminal=await openTerminal(id);
   await until(async()=>{const page=await api('sessions/'+id+'/conversation?offset=0&max=500');return page.entries?.some(entry=>entry.text.includes('Answer SWITCH-PROOF-0'));},'initial real CLI answer');
   const first=pod();ownerKey=first.metadata.labels['agenthub.dev/owner'];
-  const claimName=first.spec.volumes.find(volume=>volume.name==='workspace').persistentVolumeClaim.claimName;
-  const claimUid=json('-n',ns,'get','pvc',claimName).metadata.uid;
+  const volume=first.spec.volumes.find(volume=>volume.name==='workspace');
+  const claimName=volume.persistentVolumeClaim?.claimName;
+  const claimUid=claimName?json('-n',ns,'get','pvc',claimName).metadata.uid:null;
+  if(repositoryMode){assert(volume.emptyDir);assert(!claimName);assert(!json('-n',ns,'get','pvc').items.some(item=>item.metadata.labels?.['agenthub.dev/session']===id));}
+
   const nativeIds=new Set([first.spec.containers.find(container=>container.name==='agent').env.find(item=>item.name==='AGENTHUB_CLAUDE_SESSION_ID').value]);
-  exec("for name in first second; do printf 'dirty retained content\\n' >> /workspace/$name/tracked.txt; printf 'untracked retained content\\n' > /workspace/$name/untracked.txt; git -C /workspace/$name config proof.retained yes; done");
-  const fingerprint=()=>exec('cd /workspace; find first second -type f -exec sha256sum {} \\; | sort');
+  if(repositoryMode)exec('for name in first second; do git -C /workspace/$name checkout -b work/proof --track origin/main; done');
+  else exec("for name in first second; do printf 'dirty retained content\\n' >> /workspace/$name/tracked.txt; printf 'untracked retained content\\n' > /workspace/$name/untracked.txt; git -C /workspace/$name config proof.retained yes; done");
+  const fingerprint=()=>repositoryMode?exec('for name in first second; do git -C /workspace/$name rev-parse HEAD; git -C /workspace/$name symbolic-ref --short HEAD; sha256sum /workspace/$name/tracked.txt; done'):exec('cd /workspace; find first second -type f -exec sha256sum {} \\; | sort');
   const baseline=fingerprint();
   await until(()=>pod().status.containerStatuses?.some(container=>container.name==='agent'&&container.ready),'source ready before cancellation proof');
   shell=await openSourceShell(id);
   const cancelId=crypto.randomUUID();
   const cancelSelection={requestId:cancelId,target:{agent:'Codex',authMode,credentialId:authMode==='Subscription'?'default':null,modelEndpointUrl:null,modelName:null},
    handover:{target:'Codex',instructions:'Preserve policy.',task:'Cancellation must retain the source.'}};
+  if(repositoryMode){const saved=await api('sessions/'+id+'/provider-switch/repositories','POST');assert(saved.repositories.every(item=>!item.error));cancelSelection.repositoryHash=saved.reviewHash;cancelSelection.acknowledgeOmissions=true;}
   const cancelReview=await api('sessions/'+id+'/provider-switch/preview','POST',cancelSelection);
   await api('sessions/'+id+'/provider-switch','POST',{...cancelSelection,reviewHash:cancelReview.reviewHash});
   await api('sessions/'+id+'/messages','POST',{body:'CANCEL-QUEUED-'+authMode,priority:true});
@@ -137,6 +143,17 @@ try{
    exec("printf 'private source home' > /home/agent/provider-proof-private; printf 'private native state' > /home/agent/."+sourceProvider+"/provider-proof-native");
    const selection={requestId:crypto.randomUUID(),target:{agent:target,authMode,credentialId:authMode==='Subscription'?'default':null,modelEndpointUrl:null,modelName:null},
     handover:{target,instructions:'Preserve the dirty repositories and approval policy. Earlier native context is omitted.',task:'Continue SWITCH-PROOF-'+generation,decisions:'Use the same visible conversation.',pendingWork:'Verify files.',references:['/workspace/first/tracked.txt','/workspace/second/untracked.txt']}};
+   if(repositoryMode){
+    exec("printf dirty >> /workspace/first/tracked.txt; printf unsaved > /workspace/second/untracked.txt");
+    const dirty=await api('sessions/'+id+'/provider-switch/repositories','POST');
+    assert.equal(dirty.repositories[0].trackedChanges,1);assert.equal(dirty.repositories[1].untracked,1);
+    assert(dirty.repositories.every(item=>item.error));
+    exec("git -C /workspace/first restore tracked.txt; rm /workspace/second/untracked.txt; printf ignored-source-only > /workspace/first/.env; printf outside-source-only > /workspace/local-only.txt");
+    const saved=await api('sessions/'+id+'/provider-switch/repositories','POST');
+    assert(saved.repositories.every(item=>!item.error));assert.equal(saved.repositories[0].ignored.count,1);
+    assert(saved.outside.names.includes('local-only.txt'));
+    selection.repositoryHash=saved.reviewHash;selection.acknowledgeOmissions=true;
+   }
    const review=await api('sessions/'+id+'/provider-switch/preview','POST',selection);
    assert.equal(review.capacity.source,'native-minimum');assert(review.text.includes('Omitted:'));assert(review.text.length<=16000);
    await recovery?.arm(id,selection.requestId);
@@ -166,8 +183,14 @@ try{
    const native=finished.operation.progress.targetNativeId;
    assert(native&&!nativeIds.has(native));nativeIds.add(native);
    const current=pod();
-   assert.equal(current.spec.volumes.find(volume=>volume.name==='workspace').persistentVolumeClaim.claimName,claimName);
-   assert.equal(json('-n',ns,'get','pvc',claimName).metadata.uid,claimUid);
+   if(repositoryMode){
+    assert(current.spec.volumes.find(volume=>volume.name==='workspace').emptyDir);
+    assert(!json('-n',ns,'get','pvc').items.some(item=>item.metadata.labels?.['agenthub.dev/session']===id));
+    assert.equal(exec('test ! -e /workspace/first/.env && test ! -e /workspace/local-only.txt && printf omitted'),'omitted');
+   }else{
+    assert.equal(current.spec.volumes.find(volume=>volume.name==='workspace').persistentVolumeClaim.claimName,claimName);
+    assert.equal(json('-n',ns,'get','pvc',claimName).metadata.uid,claimUid);
+   }
    assert.equal(fingerprint(),baseline);
    const env=current.spec.containers.find(container=>container.name==='agent').env;
    assert.equal(env.find(item=>item.name==='AGENTHUB_STATE_GET_URL')?.value??'','');
@@ -193,13 +216,13 @@ try{
    assert(page.entries.some(entry=>entry.text.includes('SWITCH-PROOF-0')));
    const archive=await fetch(backendUrl+'/api/sessions/'+id+'/state',{headers:{Authorization:'Bearer '+key}});assert.equal(archive.status,200);
    const listing=execFileSync('tar',['tzf','-'],{input:Buffer.from(await archive.arrayBuffer()),encoding:'utf8',maxBuffer:8*1024*1024});
-   assert(listing.includes(native));assert(!/(^|\/)\.credentials\.json$|(^|\/)auth\.json$/m.test(listing));
+   assert(listing.includes(native));if(repositoryMode)assert(!listing.includes('local-only')&&!listing.includes('.env'));assert(!/(^|\/)\.credentials\.json$|(^|\/)auth\.json$/m.test(listing));
    await sleep(500);
    const gone=watchEvents.findIndex(event=>event.type==='DELETED'&&event.uid===source.metadata.uid);
    const added=watchEvents.findIndex(event=>event.type==='ADDED'&&event.uid===current.metadata.uid);
    assert(gone>=0&&added>gone,'actual kubelet/API watch must observe source deletion before target creation');
    assert.equal((await api('sessions/'+id)).agent,target);
-   console.log(authMode+' generation '+generation+': actual '+target+' pod, same dirty repos/PVC, fresh native/home/target-only auth, handover first, queued input afterwards, retired callback401 and native archive passed.');
+   console.log(authMode+' generation '+generation+': actual '+target+' pod, '+(repositoryMode?'exact clean commits/branches without PVC':'same dirty repos/PVC')+', fresh native/home/target-only auth, handover first, queued input afterwards, retired callback401 and native archive passed.');
    if(process.env.PROOF_RECOVERY==='1'){
     terminal.close();terminal=null;
     await api('sessions/'+id+'/pause','POST');
@@ -267,7 +290,7 @@ try{
   }
   watcher.kill('SIGTERM');watcher=null;terminal.close();terminal=null;
   await api('sessions/'+id,'DELETE',undefined,204);id=null;
-  await until(()=>{try{json('-n',ns,'get','pvc',claimName);return false;}catch{return true;}},'workspace cleanup');
+  if(claimName)await until(()=>{try{json('-n',ns,'get','pvc',claimName);return false;}catch{return true;}},'workspace cleanup');
  }
  console.log(process.env.PROOF_RECOVERY_SCOPE==='held'?'PASS: held credential/claim/checkpoint/target-loss cases against real native runtimes and storage/network policy.':'PASS: real backend + Postgres + object storage + kubelet + pinned CLIs, API-key and synthetic subscription Claude→Codex→Claude, both native model lists without supplied context-window metadata.');
 }catch(error){

@@ -2424,6 +2424,17 @@ function createCommonServer(options = {}) {
 
   function handleHttpRequest(request, response) {
     const requestPath = (request.url || '').split('?')[0];
+    if (requestPath === '/agenthub/repository-checkpoint') return (async () => {
+      if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
+      if (request.method !== 'POST') return fileError(response, 405, 'method_not_allowed');
+      const raw = await readBoundedBody(request, 400000);
+      let body; try { body = raw && JSON.parse(raw.toString('utf8')); } catch {}
+      if (!body || !Array.isArray(body.repositories) || typeof body.credentials !== 'string')
+        return fileError(response, 400, 'invalid_repository_request');
+      const manifest = await require('./repository-checkpoint').inspect(
+        env.AGENTHUB_WORKSPACE_ROOT || '/workspace', body.repositories, body.credentials);
+      sendJson(response, 200, manifest);
+    })().catch(() => { if (!response.headersSent) fileError(response, 409, 'repository_checkpoint_unavailable'); });
     if (requestPath === '/agenthub/diff') return handleDiffRequest(request, response);
     if (requestPath === '/agenthub/commands') return handleCommandsRequest(request, response);
     if (requestPath === '/agenthub/models') return handleModelsRequest(request, response);
