@@ -2,8 +2,8 @@
 
 Phase 1 design for #550, based on the 1.21–1.23 releases, `ProviderReplacement.cs`
 and the switching history, implementation, native-resume and recovery decisions.
-This document changes no runtime behavior. Implementation and acceptance await owner
-approval of this complete design. The previous PVC-only admission decision is superseded
+This document changes no runtime behavior. The owner approved implementation on 2026-11-08 with the ignored-file exception below.
+Acceptance still requires the real no-PVC proofs. The previous PVC-only admission decision is superseded
 only after the emptyDir proofs pass; PVC remains an optional workspace strategy.
 
 ## Decision: code in Git, execution state in object storage
@@ -40,20 +40,20 @@ These layouts need separate restore proofs rather than a misleading clean-tree r
 
 For each repository show its configured identity, local branch, HEAD, remote branch,
 uncommitted tracked change count, untracked count and unpushed commit count when known.
-Show unknown comparison as unknown and refuse, never report it as zero. Check staged and
-unstaged changes and all untracked files, including ignored files; ignored build outputs
-must be removed or explicitly recreated outside the preserved checkout before switching.
+Show unknown comparison as unknown and refuse, never report it as zero. Block staged and unstaged tracked changes and non-ignored untracked files. Ignored files
+do not block: show their count and a bounded sample per repository as “Ignored files will
+not carry over”, covered by the same owner acknowledgement as files outside repositories.
+The new agent must recreate dependencies (for example, run `npm install`) and build outputs;
+`.env` and similar ignored files do not carry over.
 Never put file contents, credential-bearing remote URLs or raw Git stderr into UI or logs.
 Names and counts are owner-only, escaped text, not handover instructions.
 
-Require a configured remote, an attached local branch, and the ability to publish to the
-selected remote branch. Missing remote, unavailable Git credentials, read-only repository,
-unknown push permission, detached HEAD and unpushed commits each produce a per-repository
-refusal with a repair step. Establish push access through the connected repository provider's
-permission information where available; otherwise use an authenticated non-mutating Git
-push dry-run and refuse if it cannot establish access. A successful no-op dry-run alone
-must not be treated as proof of write permission. AgentHub never publishes a probe ref.
-This deliberately excludes read-only checkouts in the first release.
+Require a configured remote, an attached local branch and a remotely available exact commit.
+Missing remote, unavailable fetch credentials, detached HEAD and unpushed commits each produce
+an actionable per-repository refusal. Read-only repositories are ready when their recorded
+commit is fetchable. Write permission is deliberately not a switch precondition: restoring
+code needs only read access, and dry-run pushes cannot establish server-side write authority.
+If the agent's requested push fails, its commit stays unpublished and the next check blocks.
 
 Fetch the selected remote branch into a private temporary verification repository using
 the session's selected Git credentials, with hooks and local configuration disabled.
@@ -149,7 +149,7 @@ records a new clean/pushed manifest. More general workspace checkpointing is sep
 | Visible history and access | Existing retained generation history, session ID, shares, links and owner/Collaborator/Viewer roles; existing history bounds still apply. |
 | Model context | Only the reviewed handover on a switch; same-provider recovery uses its own valid native checkpoint. Visible history is not full model context. |
 | Settings and authority | Selected Git access, policies, approval mode, MCP restrictions, network rules, budgets and selected secrets regenerated from hub state. Previous approvals do not transfer. |
-| Not preserved | Dirty/ignored/untracked repository files (refused before switching), files outside repos (acknowledged loss), processes, memory, sockets, installations and caches. Attachments keep their existing storage/access rules; references do not inline their bytes. |
+| Not preserved | Dirty tracked and non-ignored untracked repository files (refused before switching), ignored repository files (acknowledged loss), files outside repos (acknowledged loss), processes, memory, sockets, installations and caches. Attachments keep their existing storage/access rules; references do not inline their bytes. |
 
 ## Failure and recovery
 
@@ -193,9 +193,9 @@ Phase 2 must extend real k3s proofs with no PVC and assert zero claim creation, 
 Claude→Codex→Claude, multi-repo exact commit/branch restore despite remote tip movement,
 Git credentials sufficient to fetch, old callback rejection, first handover once, queued
 input ordering, retained history/roles and strict completed native resumes. Reproduce dirty,
-staged, ignored/untracked, unpublished, missing/readonly remote, ref deletion, permission
-revocation, clone outage, size overflow and changed-review refusals. Inspect actual archives
-for planted workspace-secret exclusion. Extend the #530 backend/container/pod fault and
+staged, non-ignored untracked, unpublished, missing remote, ref deletion, permission
+revocation, clone outage, size overflow and changed-review refusals. Verify ignored files permit switching only with acknowledgement and disappear after restore.
+Inspect actual archives for planted workspace-secret exclusion. Extend the #530 backend/container/pod fault and
 held-recovery cases for repository identities, including failures after source deletion and
 before native launch. Retain PVC regression acceptance; do not infer it from emptyDir tests.
 
