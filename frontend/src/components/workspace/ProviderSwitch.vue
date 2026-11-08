@@ -1,7 +1,9 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from '../../api.js'
-const props = defineProps({ session: { type: Object, required: true }, client: { type: Object, default: () => api } })
+// trigger: false hides the own button; the session bar's "⋯" menu opens the panel instead (#551).
+// The component stays mounted either way: it is what polls a running replacement's status.
+const props = defineProps({ session: { type: Object, required: true }, client: { type: Object, default: () => api }, trigger: { type: Boolean, default: true } })
 const emit = defineEmits(['updated', 'pending'])
 const reviewElement = ref(null)
 const open = ref(false), status = ref(null), error = ref(''), busy = ref(false), review = ref(null)
@@ -129,11 +131,12 @@ watch(() => JSON.stringify(selection()), () => { review.value = null })
 watch(() => props.session.executionGeneration, () => { review.value = null; repositories.value = null; acknowledgeOmissions.value = false; requestId.value = newRequestId(); void load() })
 onMounted(() => { void load(); timer = setInterval(() => { if (open.value || active.value) void load() }, 2000) })
 onBeforeUnmount(() => { disposed = true; catalogGeneration++; clearInterval(timer) })
+defineExpose({ toggle, active })
 </script>
 
 <template>
-  <div class="provider-switch" data-provider-switch>
-    <button type="button" class="bar-btn" :aria-expanded="open" @click="toggle">{{ active ? 'Provider replacement' : 'Switch provider' }}</button>
+  <div class="provider-switch" :class="{ bare: !trigger }" data-provider-switch>
+    <button v-if="trigger" type="button" class="bar-btn" :aria-expanded="open" @click="toggle">{{ active ? 'Provider replacement' : 'Switch provider' }}</button>
     <section v-if="open" class="provider-panel" role="dialog" aria-label="Switch provider" data-provider-panel @keydown.esc="open = false">
       <p v-if="error" role="alert">{{ error }}</p>
       <template v-if="active">
@@ -208,6 +211,8 @@ onBeforeUnmount(() => { disposed = true; catalogGeneration++; clearInterval(time
 </template>
 
 <style scoped>
+/* Without its button the wrapper must not take a slot in the bar's flex row. */
+.bare { display: contents; }
 .provider-panel { box-sizing: border-box; position: absolute; z-index: 30; inset: 100% 12px auto auto; width: min(600px, calc(100vw - 32px)); max-height: 75vh; overflow: auto; padding: 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); box-shadow: 0 8px 32px #0008; }
 label { display: grid; gap: 5px; margin: 12px 0; }
 input, select, textarea { box-sizing: border-box; width: 100%; color: var(--text); background: var(--bg); border: 1px solid var(--border); padding: 8px; border-radius: 5px; }

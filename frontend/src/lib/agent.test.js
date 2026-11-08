@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  agentOptions, agentPayload, authOptions, credentialReadiness, defaultAgentForm, defaultPolicy,
+  accountShortLabel, agentOptions, agentPayload, authOptions, credentialReadiness, defaultAgentForm, defaultPolicy,
   filterAgentOptions, gitPatDefaults, gitPatHosts, gitPatIdsChange, gitPatIdsPayload, gitPatName, gitPatOptions,
   gitPatSelectionFor,
   needsOpenClawApiKeySource, openClawApiKeySourceOptions, policyFromForm, policyPayload,
@@ -283,5 +283,20 @@ describe('git PAT selection with several tokens per host', () => {
     expect(gitPatIdsPayload(['g', 'h'], tokens)).toEqual(['g', 'h'])
     expect(gitPatIdsChange(['g', 'h'], tokens, null)).toEqual({ gitPatIds: ['g', 'h'] })
     expect(gitPatIdsChange(['p', 'h'], tokens, ['g'])).toEqual({ gitPatIds: ['*'] })
+  })
+})
+
+describe('accountShortLabel', () => {
+  const work = { id: 'w1', label: 'Work', email: 'firstname.lastname@your-org.example' }
+  it('uses the name the person gave the login', () => {
+    expect(accountShortLabel(work, [work])).toBe('Work')
+  })
+  it('falls back to the e-mail local part, then the id', () => {
+    expect(accountShortLabel({ id: 'a1', label: '', email: 'me@example.com' })).toBe('me')
+    expect(accountShortLabel({ id: 'a1' })).toBe('a1')
+  })
+  it('spells out logins that would otherwise read the same', () => {
+    const other = { id: 'w2', label: 'Work', email: 'second@example.com' }
+    expect(accountShortLabel(work, [work, other])).toBe('Work — firstname.lastname@your-org.example')
   })
 })

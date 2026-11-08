@@ -45,8 +45,9 @@ function mountTerminal(props = {}) {
   })
 }
 
-// Messages live behind the ✉ button; nothing about them is drawn over the terminal.
+// Messages live behind ✉ in the session menu (#551); nothing about them is drawn over the terminal.
 async function openPanel(wrapper) {
+  await wrapper.get('[data-session-menu-toggle]').trigger('click')
   await wrapper.get('[data-send-message-toggle]').trigger('click')
   return wrapper.get('[data-send-message]')
 }
