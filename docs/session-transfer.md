@@ -77,7 +77,7 @@ local Claude Code over MCP and from the web app. There are three surfaces, and o
 |---|---|---|
 | stdio MCP (`mcp/agenthub`): `session_take_local`, `session_hand_back` | personal API token | the stdio process — it runs on the person's machine |
 | remote `/mcp`: the same two tools | OAuth sign-in | a `curl \| tar` command the caller runs |
-| web app: **⇩ Continue locally** on the session page | the login | the same command, pasted into a terminal |
+| web app: **⋯ → ⇩ Continue locally** on the session page | the login | the same command, pasted into a terminal |
 
 **Taking a session local** pauses it — only after an explicit `confirm`, because pausing interrupts
 whatever the agent is doing — and then *waits until the pod is gone* before reading the archive. A
