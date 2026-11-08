@@ -190,6 +190,19 @@ export function accountOptionLabel(account) {
   return identity ? `${account.label} — ${identity}` : account.label
 }
 
+/**
+ * The name a person gave a login, for places too narrow for its identity (the session menu, #551):
+ * the label, else the e-mail's local part, else the id. When another listed login would read the
+ * same, the full option label is used instead, so two logins never look alike.
+ */
+export function accountShortLabel(account, accounts = []) {
+  if (!account) return ''
+  const short = a => String(a?.label || '').trim() || String(a?.email || '').split('@')[0] || a?.id || ''
+  const name = short(account)
+  return accounts.some(other => other !== account && other?.id !== account.id && short(other) === name)
+    ? accountOptionLabel(account) : name
+}
+
 /** Whether a listing entry is at its usage limit right now (docs/account-limits.md). */
 export function isAccountExhausted(account) {
   return !!account?.isExhausted

@@ -21,7 +21,7 @@ import { api, getSharedConversation } from '../api.js'
 import { repoShortName } from '../lib/text.js'
 import { fullMessageTime, shortMessageTime } from '../lib/message-time.js'
 import { terminalAttachmentPaths } from '../lib/attachments.js'
-import { accountLimitLabel, accountOptionLabel, accountsFor, authLabel, availableAlternatives, defaultAccountId, isAccountExhausted } from '../lib/agent.js'
+import { accountLimitLabel, accountOptionLabel, accountShortLabel, accountsFor, authLabel, availableAlternatives, defaultAccountId, isAccountExhausted } from '../lib/agent.js'
 import { conversationState, mergeConversationPage, toTranscriptItems } from '../lib/transcript.js'
 import { FLEET_WAITING, fleetLabel, pendingFleetMessages, sentEntry, stillPending, trackable } from '../lib/pending-messages.js'
 import { workspaceSent } from '../lib/session-drafts.js'
@@ -31,6 +31,7 @@ import { preferredUi } from '../lib/ui-preference.js'
 import SecretRequestBanner from './SecretRequestBanner.vue'
 import SessionModelSwitch from './workspace/SessionModelSwitch.vue'
 import ProviderSwitch from './workspace/ProviderSwitch.vue'
+import SessionMenu from './workspace/SessionMenu.vue'
 import { busyReason } from '../lib/model-switch.js'
 
 const props = defineProps({ session: Object, sharedToken: { type: String, default: null }, initialUi: { type: String, default: null } })
@@ -200,7 +201,22 @@ const pendingItems = computed(() => [
     sendNow: showSendMessage.value, interruptSend: showSendMessage.value, busy: pendingBusy.value['fleet-' + m.id], note: pendingNotes.value['fleet-' + m.id] }))
 ])
 const workspace = ref(null)
+const sessionMenu = ref(null)
+const providerSwitch = ref(null)
 const statuses = reactive({ agent: 'connecting…', shell: '' })
+// The connection is a dot with its words in the tooltip and the accessible name (#551): as a
+// word it took a slot in the bar that the controls next to it needed.
+const connectionText = computed(() => (modern.value ? statuses.agent : statuses[activeTab.value]) || '')
+const connectionTone = computed(() => connectionText.value === 'connected' ? 'ok'
+  : /^connecting|^reconnecting/.test(connectionText.value) ? 'pending'
+  : ['', 'history'].includes(connectionText.value) ? 'none' : 'down')
+const connectionLabel = computed(() => `${activeTab.value === 'shell' && !modern.value ? 'Shell' : 'Agent'}: ${connectionText.value || 'not connected'}`)
+// What the closed "⋯" menu must still signal, else open messages or an outdated image go unseen.
+const menuAttention = computed(() => [
+  showMessages.value && visibleMessages.value.length ? `${visibleMessages.value.length} open message${visibleMessages.value.length === 1 ? '' : 's'}` : '',
+  props.session?.outdatedImage ? 'outdated image' : '',
+  replacementPending.value ? 'provider replacement running' : ''
+].filter(Boolean).join(', '))
 
 // In-app approval of tool-permission requests (in addition to the messengers).
 const pendingPermissions = ref([])
@@ -366,6 +382,9 @@ const accountNote = ref('')
 // What the Workspace already knows would make the session agent refuse a live model switch (#478).
 const modelSwitchBusy = computed(() => busyReason(workspaceActivity.value,
   { pendingPermissions: pendingPermissions.value.length, menuOpen: !!cliMenu.value }))
+// The bar shows the account in the "⋯" menu only (#551); the full e-mail sits under the picker
+// there, where a long address no longer pushes every other control onto a second row.
+const currentAccountIdentity = computed(() => [currentAccount.value?.email, currentAccount.value?.organization].filter(Boolean).join(' · '))
 const showAccountSwitch = computed(() => !props.sharedToken && capabilities.value.canManage
   && props.session?.phase === 'Running' && props.session?.authMode === 'Subscription' && accountList.value.length >= 2)
 
@@ -599,36 +618,49 @@ function interruptWorkspaceAgent() {
           <span v-if="session.sharedBy" class="shared">· shared by {{ session.sharedBy }}</span>
         </div>
       </div>
-      <label v-if="showAccountSwitch" class="acct" data-account-switch>
-        <span class="acct-label">Account</span>
-        <select data-account-select :value="pendingAccountId || currentAccountId" :disabled="accountBusy"
-          aria-label="Provider account of this session" @change="chooseAccount">
-          <option v-for="a in accountList" :key="a.id" :value="a.id" :data-account-option="a.id"
-            :data-account-exhausted="isAccountExhausted(a) ? 'true' : null">{{ accountOptionLabel(a) }}{{ isAccountExhausted(a) ? ` (${accountLimitLabel(a)})` : '' }}</option>
-        </select>
-      </label>
-      <ProviderSwitch v-if="capabilities.canManage && !sharedToken" :session="session" @updated="emit('runtime-updated')" @pending="providerPending = $event" />
       <SessionModelSwitch v-if="!sharedToken && !replacementPending" :session="session" :busy="modelSwitchBusy" @switched="emit('runtime-updated')" />
-      <button class="bar-btn" data-open-files @click="workspace?.openFiles()">Files</button>
-      <button v-if="browserRunning" class="bar-btn" data-open-browser @click="workspace?.openBrowser()">Browser</button>
-      <nav class="tabs">
-        <button :class="{ on: modern }" data-open-workspace @click="selectTab('workspace')">Workspace</button>
-        <button v-if="!isChat" :class="{ on: activeTab === 'agent' }" @click="selectTab('agent')">Terminal</button>
-        <button v-if="isLive && capabilities.canShell" :class="{ on: activeTab === 'shell' }" @click="selectTab('shell')">{{ tabLabel('shell') }}</button>
+      <span class="conn" :class="connectionTone" role="status" :aria-label="connectionLabel" :title="connectionLabel" data-connection-status
+        :data-state="connectionText || null"><span class="conn-dot" aria-hidden="true"></span></span>
+      <nav class="tabs" aria-label="View">
+        <button :class="{ on: modern }" :aria-pressed="modern ? 'true' : 'false'" data-open-workspace @click="selectTab('workspace')">Workspace</button>
+        <button v-if="!isChat" :class="{ on: activeTab === 'agent' }" :aria-pressed="activeTab === 'agent' ? 'true' : 'false'" @click="selectTab('agent')">Terminal</button>
+        <button v-if="isLive && capabilities.canShell" :class="{ on: activeTab === 'shell' }" :aria-pressed="activeTab === 'shell' ? 'true' : 'false'" @click="selectTab('shell')">{{ tabLabel('shell') }}</button>
       </nav>
       <span v-if="!capabilities.canWrite" class="readonly">Read-only</span>
       <template v-if="capabilities.canManage">
-        <button v-if="canPause(session)" class="bar-btn" @click="$emit('pause', session.id)">❚❚ Pause</button>
-        <button v-if="session.canResume" class="bar-btn" @click="$emit('resume', session.id)">▶ Resume</button>
-        <button v-if="showMessages" class="bar-btn" data-send-message-toggle :class="{ on: sendOpen }" @click="sendOpen = !sendOpen">✉ Messages<span v-if="visibleMessages.length" class="msg-badge" data-message-badge>{{ visibleMessages.length }}</span></button>
-        <button class="bar-btn" @click="$emit('edit', session.id)">✎ Edit session</button>
-        <button v-if="(session.agent || 'Claude') === 'Claude' && !sharedToken" class="bar-btn" data-continue-locally-toggle
-          :class="{ on: localOpen }" @click="localOpen = !localOpen; shareOpen = false">⇩ Continue locally</button>
-        <button class="bar-btn primary" @click="shareOpen = !shareOpen; localOpen = false">↗ Share</button>
+        <button v-if="canPause(session)" class="bar-btn icon-btn" aria-label="Pause" title="Pause" @click="$emit('pause', session.id)"><span aria-hidden="true">❚❚</span><span class="btn-text"> Pause</span></button>
+        <button v-if="session.canResume" class="bar-btn icon-btn" aria-label="Resume" title="Resume" @click="$emit('resume', session.id)"><span aria-hidden="true">▶</span><span class="btn-text"> Resume</span></button>
+        <button class="bar-btn primary icon-btn" aria-label="Share" title="Share" :aria-expanded="shareOpen ? 'true' : 'false'" data-share-toggle
+          @click="shareOpen = !shareOpen; localOpen = false"><span aria-hidden="true">↗</span><span class="btn-text"> Share</span></button>
       </template>
-      <span v-if="session.outdatedImage" class="status" data-outdated-image>outdated image</span>
-      <button v-if="session.outdatedImage && capabilities.canManage && !sharedToken" class="bar-btn" :disabled="runtimeUpdating" @click="updateRuntime">Update now</button>
-      <span class="status">{{ modern ? statuses.agent : statuses[activeTab] }}</span>
+      <SessionMenu ref="sessionMenu" :attention="menuAttention">
+        <div v-if="showAccountSwitch" class="menu-acct" data-account-switch>
+          <label class="menu-label" :for="`acct-${session.id}`">Account</label>
+          <select :id="`acct-${session.id}`" data-account-select :value="pendingAccountId || currentAccountId" :disabled="accountBusy"
+            aria-label="Provider account of this session" @change="chooseAccount">
+            <option v-for="a in accountList" :key="a.id" :value="a.id" :data-account-option="a.id"
+              :data-account-exhausted="isAccountExhausted(a) ? 'true' : null" :title="accountOptionLabel(a)">{{ accountShortLabel(a, accountList) }}{{ isAccountExhausted(a) ? ` (${accountLimitLabel(a)})` : '' }}</option>
+          </select>
+          <span v-if="currentAccountIdentity" class="menu-hint" data-account-identity :title="currentAccountIdentity">{{ currentAccountIdentity }}</span>
+        </div>
+        <button v-if="capabilities.canManage && !sharedToken" type="button" class="menu-item" data-menu-closes data-provider-switch-open
+          @click="providerSwitch?.toggle()">{{ replacementPending ? 'Provider replacement…' : 'Switch provider…' }}</button>
+        <button type="button" class="menu-item" data-menu-closes data-open-files @click="workspace?.openFiles()">Files</button>
+        <button v-if="browserRunning" type="button" class="menu-item" data-menu-closes data-open-browser @click="workspace?.openBrowser()">Browser</button>
+        <template v-if="capabilities.canManage">
+          <button v-if="showMessages" type="button" class="menu-item" data-menu-closes data-send-message-toggle :class="{ on: sendOpen }"
+            :aria-pressed="sendOpen ? 'true' : 'false'" @click="sendOpen = !sendOpen">✉ Messages<span v-if="visibleMessages.length" class="msg-badge" data-message-badge>{{ visibleMessages.length }}</span></button>
+          <button type="button" class="menu-item" data-menu-closes data-edit-session @click="$emit('edit', session.id)">✎ Edit session</button>
+          <button v-if="(session.agent || 'Claude') === 'Claude' && !sharedToken" type="button" class="menu-item" data-menu-closes data-continue-locally-toggle
+            :class="{ on: localOpen }" @click="localOpen = !localOpen; shareOpen = false">⇩ Continue locally</button>
+        </template>
+        <div v-if="session.outdatedImage" class="menu-outdated">
+          <span class="menu-hint" data-outdated-image>outdated image</span>
+          <button v-if="capabilities.canManage && !sharedToken" type="button" class="menu-item" data-menu-closes :disabled="runtimeUpdating" @click="updateRuntime">Update now</button>
+        </div>
+      </SessionMenu>
+      <ProviderSwitch v-if="capabilities.canManage && !sharedToken" ref="providerSwitch" :trigger="false" :session="session"
+        @updated="emit('runtime-updated')" @pending="providerPending = $event" />
       <div v-if="localOpen" class="share-pop" data-continue-locally-pop>
         <div class="share-head"><span>Continue locally</span><button class="ghost" @click="localOpen = false">✕</button></div>
         <ContinueLocallyDialog :session="session" @close="localOpen = false" @changed="$emit('transferred')" />
@@ -806,14 +838,37 @@ function interruptWorkspaceAgent() {
   </div>
 </template>
 <style scoped>
-.term-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #0e0d0b; }
-.term-bar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--bg); position: relative; flex-wrap: wrap; }
+.term-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #0e0d0b; container-type: inline-size; container-name: session-view; }
+/* One row at every width (#551): the controls that do not fit go into the "⋯" menu, not onto a
+   second line, so the conversation below keeps a fixed top edge. The container query (at the
+   end of the sheet) sizes the controls by the view's own width, which the sidebar changes
+   without the viewport changing. */
+.term-bar { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--bg); position: relative; flex-wrap: nowrap; }
+.term-bar > * { flex-shrink: 0; }
+.conn { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; }
+.conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted-3); }
+.conn.ok .conn-dot { background: var(--ok); }
+.conn.pending .conn-dot { background: var(--warn); }
+.conn.down .conn-dot { background: var(--danger); }
+.conn.none .conn-dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-3); }
+/* The model keeps its full id while the bar has room; only the narrowest tier lets it shrink,
+   and then after the title (whose shrink factor is far larger). */
+.term-bar :deep(.model-switch) { flex: 0 0 auto; max-width: 260px; }
+.term-bar :deep(.model-switch .chip) { max-width: 100%; min-width: 0; }
+.menu-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border: none; border-radius: 8px; background: none; color: var(--text); font-size: 12px; text-align: left; white-space: nowrap; }
+.menu-item:hover, .menu-item:focus-visible { background: var(--panel-2); }
+.menu-item.on { background: var(--border-2); color: var(--strong); }
+.menu-acct { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px 8px; margin-bottom: 2px; border-bottom: 1px solid var(--border-2); }
+.menu-acct select { width: 100%; padding: 5px 8px; font-size: 12px; }
+.menu-label { margin: 0; font-size: 11px; color: var(--muted-3); }
+.menu-hint { font-size: 11px; color: var(--muted-3); overflow-wrap: anywhere; }
+.menu-outdated { display: flex; flex-direction: column; gap: 2px; padding: 6px 10px 0; margin-top: 2px; border-top: 1px solid var(--border-2); }
+.menu-outdated .menu-item { padding-left: 0; }
 .back { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; border-radius: 9px; border: none; background: none; color: var(--muted); font-size: 16px; padding: 0; flex-shrink: 0; }
 .back:hover { background: var(--panel-2); color: var(--text); }
-/* A floor for the title: with account, Files, four tabs and the actions in one bar, a zero
-   min-width let the flex row squeeze the session name to its first letter; the controls wrap
-   onto the next line instead. */
-.head-main { min-width: min(240px, 100%); flex: 1 1 240px; }
+/* The title gives way first, down to a floor: a zero min-width let the flex row squeeze the
+   session name to its first letter. Everything else in the bar is fixed-size or in the menu. */
+.head-main { min-width: 96px; flex: 0 100 auto; overflow: hidden; }
 .title { font-family: var(--display); font-size: 17px; font-weight: 700; color: var(--strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meta { display: flex; align-items: center; gap: 7px; margin-top: 2px; font-size: 11px; color: var(--muted-3); white-space: nowrap; overflow: hidden; }
 .st { font-weight: 700; }
@@ -829,8 +884,6 @@ function interruptWorkspaceAgent() {
 .tabs button:hover { color: var(--text); background: none; }
 .tabs button.on { background: var(--border-2); color: var(--strong); }
 .bar-btn { font-size: 12px; padding: 6px 14px; border-radius: 9px; white-space: nowrap; }
-.acct { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 11px; color: var(--muted-3); }
-.acct select { width: auto; max-width: 260px; padding: 5px 10px; font-size: 12px; }
 .acct-note { color: var(--accent-2); background: #121a24; border-bottom: 1px solid #24405c; }
 .readonly { font-size: 12px; }
 .status { color: var(--muted-3); font: 11px var(--mono); }
@@ -893,4 +946,31 @@ function interruptWorkspaceAgent() {
 .drawer-toolbar button[aria-expanded=true] { color: var(--strong); background: var(--panel-2); }
 .sync-note { margin-right: auto; color: var(--muted-3); font-size: 10px; }
 @media(max-width: 640px) { .sync-note { max-width: 45%; line-height: 1.4; } .perm-actions { flex-wrap: wrap; } }
+/* Last in the sheet: these override the bar rules above at equal specificity. */
+@container session-view (max-width: 860px) {
+  .btn-text { display: none; }
+  .icon-btn { padding: 6px 10px; }
+  .term-bar :deep(.model-switch .chip .label) { display: none; }
+}
+@container session-view (max-width: 720px) {
+  .term-bar { gap: 6px; padding: 8px 12px; }
+  .back { width: 24px; }
+  .head-main { min-width: 64px; }
+  .readonly { font-size: 11px; }
+  .icon-btn { padding: 6px 9px; }
+  .tabs button { padding: 5px 6px; font-size: 11px; }
+  .term-bar :deep(.model-switch) { flex-shrink: 1; min-width: 64px; }
+}
+/* A phone cannot hold the view switch and a title on one line. Rather than letting the row
+   overflow, it splits on purpose: title and "⋯" on the first line, the controls on the second.
+   512 px is the narrowest view in which an owner's bar still fits one row (measured in Chromium);
+   a 768 px window with the default sidebar leaves 520. */
+@container session-view (max-width: 511px) {
+  .term-bar { flex-wrap: wrap; row-gap: 8px; }
+  .back { order: -3; }
+  .head-main { order: -2; flex: 1 1 calc(100% - 80px); }
+  .term-bar :deep(.session-menu) { order: -1; }
+  .conn { margin-left: 0; }
+  .term-bar :deep(.model-switch) { flex: 1 1 0; min-width: 64px; max-width: none; }
+}
 </style>
