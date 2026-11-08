@@ -53,7 +53,8 @@ async function ignoredFiles(directory) {
   return new Promise((resolve, reject) => {
     const child = spawn('git', ['--no-optional-locks', '-c', 'core.fsmonitor=false',
       'ls-files', '--others', '--ignored', '--exclude-standard', '-z'], {
-      cwd: directory, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, GIT_CONFIG_COUNT: '0' }
+      cwd: directory, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, GIT_CONFIG_COUNT: '0', GIT_CONFIG_NOSYSTEM: '1',
+        GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_PARAMETERS: '' }
     });
     let pending = '', count = 0, bytes = 0, failed = false;
     const retained = [];
@@ -91,7 +92,8 @@ async function inspectRepository(root, configured, index, credentialFile) {
       throw new Error('repository_layout_unsupported');
     const top = (await git(directory, ['rev-parse', '--show-toplevel'])).trim();
     if (top !== directory) throw new Error('repository_layout_unsupported');
-    result.branch = (await git(directory, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).trim();
+    try { result.branch = (await git(directory, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).trim(); }
+    catch { throw new Error('repository_branch_required'); }
     if (Buffer.byteLength(result.branch) > LIMITS.pathBytes) throw new Error('repository_ref_limit');
     await git(directory, ['check-ref-format', '--branch', result.branch]);
     result.commit = (await git(directory, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
@@ -116,7 +118,9 @@ async function inspectRepository(root, configured, index, credentialFile) {
     }
     if (result.trackedChanges || result.untracked) throw new Error('repository_work_not_saved');
     const configuredUrl = remote(configured.url);
-    const actualUrl = (await git(directory, ['remote', 'get-url', 'origin'])).trim();
+    let actualUrl;
+    try { actualUrl = (await git(directory, ['remote', 'get-url', 'origin'])).trim(); }
+    catch { throw new Error('repository_remote_required'); }
     if (actualUrl !== configuredUrl) throw new Error('repository_remote_changed');
     const upstream = (await git(directory, ['for-each-ref', '--format=%(upstream:remotename)%00%(upstream:remoteref)',
       `refs/heads/${result.branch}`])).trim().split('\0');

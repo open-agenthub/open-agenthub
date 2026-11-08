@@ -11,6 +11,17 @@ public class ProviderSwitchJournalTests
         AgentKind.Claude, "source-pod", "workspace-uid", new(AgentKind.Codex, AgentAuthMode.Subscription,
             "target-account", null, null), "Reviewed handover. Omitted: native resume state.");
 
+    [Fact]
+    public void RepositoryReviewPinsCodeAndOmissionsRatherThanTheMovingRemoteTip()
+    {
+        var entry = new RepositoryCheckpointEntry(0, "repo", "work/proof", new string('a', 40),
+            "refs/heads/work/proof", new string('a', 40), 0, 0, new(1, [".env"], 0), 0, null);
+        var manifest = new RepositoryCheckpoint(1, "repository", [entry], new(0, [], 0));
+        Assert.Equal(manifest.ReviewHash, (manifest with { Repositories = [entry with { RemoteTip = new string('b', 40) }] }).ReviewHash);
+        Assert.NotEqual(manifest.ReviewHash, (manifest with { Repositories = [entry with { Commit = new string('b', 40) }] }).ReviewHash);
+        Assert.NotEqual(manifest.ReviewHash, (manifest with { Outside = new(1, ["scratch.txt"], 0) }).ReviewHash);
+    }
+
     [PostgreSqlFact]
     public async Task RepositoryIdentitySurvivesAdmissionAndNeedsFinalCodeVerification()
     {

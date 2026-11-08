@@ -62,7 +62,7 @@ public sealed partial class KubernetesSessionService
     {
         var actual = await InspectProviderRepositoriesAsync(record.Owner, record, source, ct);
         actual.Validate();
-        if (JsonSerializer.Serialize(expected) != JsonSerializer.Serialize(actual))
+        if (expected.ReviewHash != actual.ReviewHash)
             throw new ProviderReplacementRefusedException("Repository state or omitted files changed after review. This replacement is held; cancel before source stop and review again.");
     }
 }

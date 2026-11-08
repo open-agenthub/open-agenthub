@@ -60,6 +60,8 @@ function selection() {
 const repositoryReasons = {
   repository_work_not_saved: 'Commit intended tracked changes and non-ignored untracked files, then push.',
   repository_commit_not_pushed: 'The exact commit is not available on the remote branch. Push it, then check again.',
+  repository_branch_required: 'Check out an attached local task branch, then check again.',
+  repository_remote_required: 'Configure the session repository as the origin remote, then check again.',
   repository_remote_changed: 'The remote differs from the session repository. Restore the configured remote.',
   repository_upstream_required: 'Set an upstream branch on the configured remote.',
   repository_submodules_unsupported: 'Submodules are not supported for this switch.',

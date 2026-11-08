@@ -68,7 +68,7 @@ public sealed partial class KubernetesSessionService
             + $"\n\nReplacement request: {selection.RequestId:D}";
         if (framed.Length > HandoverPreviewBuilder.MaxCharacters) throw new ArgumentException("Handover including request marker exceeds 16000 characters.");
         var capacity = await TargetCapacityAsync(owner, target, framed, ct);
-        var digest = ReviewDigest(record, pod.Metadata.Uid, workspace?.ClaimUid ?? JsonSerializer.Serialize(repositories), target, selection.RequestId, framed);
+        var digest = ReviewDigest(record, pod.Metadata.Uid, workspace?.ClaimUid ?? repositories!.ReviewHash, target, selection.RequestId, framed);
         return new(framed, digest, target, capacity,
             "The session's approval mode, tool restrictions, MCP access, secret selection and network policy are preserved. Previous approvals are not transferred. Only the reviewed text enters fresh native context; visible history is not model context.", repositories);
     }

@@ -12,7 +12,7 @@ public sealed record RepositoryCheckpoint(int Version, string Strategy,
     IReadOnlyList<RepositoryCheckpointEntry> Repositories, RepositoryOmissions Outside)
 {
     public string ReviewHash => Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(
-        new { Version, Strategy, Repositories, Outside })));
+        new { Version, Strategy, Repositories = Repositories.Select(item => item with { RemoteTip = null }), Outside })));
 
     public void Validate(bool requireReady = true)
     {
