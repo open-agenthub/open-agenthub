@@ -1,4 +1,5 @@
 using System.Net;
+using AgentHub.TestSupport;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
@@ -66,13 +67,7 @@ public static class DeletedSessionScenario
 
     public static async Task<List<DeletedStep>> RunAsync(string connectionString, bool verify = true)
     {
-        using var probe = new TcpListener(IPAddress.Loopback, 0);
-        probe.Start();
-        var port = ((IPEndPoint)probe.LocalEndpoint).Port;
-        probe.Stop();
-        using var listener = new HttpListener();
-        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
-        listener.Start();
+        using var listener = LoopbackHttpListener.Start(out var port);
         var wire = new List<string>();
         using var stop = new CancellationTokenSource();
         var server = Task.Run(() => ServeAsync(listener, wire, stop.Token));

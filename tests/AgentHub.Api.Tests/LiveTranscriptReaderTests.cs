@@ -119,13 +119,7 @@ public class LiveTranscriptReaderTests
     public async Task RealHttp_StaleIpGetsNoTokenAndFreshPodGetsTheTranscript()
     {
         // Exercise the SDK's actual wire request and the reader's actual HTTP transport.
-        using var socket = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-        socket.Start();
-        var port = ((IPEndPoint)socket.LocalEndpoint).Port;
-        socket.Stop();
-        using var listener = new HttpListener();
-        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
-        listener.Start();
+        using var listener = AgentHub.TestSupport.LoopbackHttpListener.Start(out var port);
         using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var live = false;
         var tokenRequests = 0;

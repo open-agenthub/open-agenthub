@@ -1,4 +1,5 @@
 using System.Net;
+using AgentHub.TestSupport;
 using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Reflection;
@@ -69,17 +70,11 @@ public static class PinnedSessionScenario
 
     public static async Task<List<PinnedStep>> RunAsync(string connectionString, bool forum, bool verify = true)
     {
-        var port = FreePort();
-        var agentPort = FreePort();
-        using var bot = new HttpListener();
-        bot.Prefixes.Add($"http://127.0.0.1:{port}/");
-        bot.Start();
+        using var bot = LoopbackHttpListener.Start(out var port);
         var pods = new Dictionary<string, string> { [A] = "127.0.0.2", [B] = "127.0.0.3", [C] = "127.0.0.4" };
         var typed = pods.Keys.ToDictionary(id => id, _ => new List<string>());
         // One listener for all pods: the address a connection arrived on says whose terminal it is.
-        using var podListener = new HttpListener();
-        foreach (var ip in pods.Values) podListener.Prefixes.Add($"http://{ip}:{agentPort}/");
-        podListener.Start();
+        using var podListener = LoopbackHttpListener.Start(p => pods.Values.Select(ip => $"http://{ip}:{p}/"), out var agentPort);
         var byIp = pods.ToDictionary(p => p.Value, p => typed[p.Key]);
         var wire = new List<string>();
         using var stop = new CancellationTokenSource();
@@ -226,13 +221,6 @@ public static class PinnedSessionScenario
     private static void Check(bool ok, string what)
     {
         if (!ok) throw new Exception("Pinned-session proof failed: " + what);
-    }
-
-    private static int FreePort()
-    {
-        using var probe = new TcpListener(IPAddress.Loopback, 0);
-        probe.Start();
-        return ((IPEndPoint)probe.LocalEndpoint).Port;
     }
 
     private static async Task DispatchAsync(TelegramUpdateService update, string text, bool forum, string? thread)

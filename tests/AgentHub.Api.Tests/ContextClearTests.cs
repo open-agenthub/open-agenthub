@@ -100,13 +100,7 @@ public class ContextClearTests
     [Fact]
     public async Task RealHttpVerifiesPodIdentityBeforeSendingTheCallbackTokenAndHandover()
     {
-        using var socket = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-        socket.Start();
-        var port = ((IPEndPoint)socket.LocalEndpoint).Port;
-        socket.Stop();
-        using var listener = new HttpListener();
-        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
-        listener.Start();
+        using var listener = AgentHub.TestSupport.LoopbackHttpListener.Start(out var port);
         var identity = new Identity();
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?> { ["AgentHub:AgentPort"] = port.ToString() }).Build();
         using var http = new HttpClient();
