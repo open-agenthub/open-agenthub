@@ -40,7 +40,9 @@ These layouts need separate restore proofs rather than a misleading clean-tree r
 The first repository-backed path accepts HTTP(S) remotes only. SSH remotes are not supported yet (follow-up #556). SSH needs separately projected
 key/host verification and a dedicated proof; borrowing the source home or agent socket would
 not establish target access. Fetch verification uses a private HOME and only the freshly
-resolved session Git store, excluding source .netrc files and askpass helpers.
+resolved session Git store, excluding source .netrc files and askpass helpers. Credential
+and Git-object temporary directories are private children of the separate `/tmp` volume;
+ambient TMPDIR cannot place them in an archived provider-state directory.
 
 For each repository show its configured identity, local branch, HEAD, remote branch,
 uncommitted tracked change count, untracked count and unpushed commit count when known.

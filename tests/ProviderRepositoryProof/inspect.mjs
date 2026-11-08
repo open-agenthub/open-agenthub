@@ -69,10 +69,11 @@ try {
   const credentials = url.replace('http://', 'http://proof:synthetic-fetch@') + '\n';
   const authenticated = await inspect(workspace, configured, credentials);
   assert.equal(authenticated.repositories[0].error, null);
-  const oddScratch = path.join(root, "scratch space'quote"); await fs.mkdir(oddScratch);
+  const oddScratch = path.join(root, "native-state space'quote"); await fs.mkdir(oddScratch);
   const oldTmp = process.env.TMPDIR;
   try { process.env.TMPDIR = oddScratch; assert.equal((await inspect(workspace, configured, credentials)).repositories[0].error, null); }
   finally { if (oldTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = oldTmp; }
+  assert.deepEqual(await fs.readdir(oddScratch), [], 'credential/object preflight scratch must not enter an ambient native-state TMPDIR');
 
   assert(!JSON.stringify(authenticated).includes('synthetic-fetch'));
   const oldGitDir = process.env.GIT_DIR;

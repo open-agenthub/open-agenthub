@@ -2,7 +2,6 @@
 
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const os = require('node:os');
 const { execFile, spawn } = require('node:child_process');
 const LIMITS = Object.freeze({ repositories: 32, manifestBytes: 65536, pathBytes: 1024,
   entries: 10000, names: 200, namesBytes: 16384, outputBytes: 1024 * 1024, networkMs: 60000 });
@@ -144,7 +143,7 @@ async function inspectRepository(root, configured, index, credentialFile) {
     result.remoteBranch = upstream[1];
     if (Buffer.byteLength(result.remoteBranch) > LIMITS.pathBytes) throw new Error('repository_ref_limit');
     await git(directory, ['check-ref-format', result.remoteBranch]);
-    const verification = await fs.mkdtemp(path.join(os.tmpdir(), 'repo-check-'));
+    const verification = await fs.mkdtemp(path.join('/tmp', 'repo-check-'));
     try {
       await git(verification, ['init', '--bare', '.']);
       // A separate object database avoids trusting stale local remote refs or local objects.
@@ -175,7 +174,9 @@ async function inspect(root, configured, credentials = '') {
   if (new Set(destinations).size !== destinations.length
       || destinations.some(a => destinations.some(b => a !== b && a.startsWith(b + '/'))))
     throw new Error('repository_layout_unsupported');
-  const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'repo-credentials-'));
+  // Both secret and Git-object scratch stay on the separate tmp volume, even if ambient
+  // TMPDIR points into a provider state directory included by the periodic archive.
+  const scratch = await fs.mkdtemp(path.join('/tmp', 'repo-credentials-'));
   try {
     const credentialFile = path.join(scratch, 'store');
     if (typeof credentials !== 'string' || Buffer.byteLength(credentials) > 262144) throw new Error('repository_credentials_invalid');
