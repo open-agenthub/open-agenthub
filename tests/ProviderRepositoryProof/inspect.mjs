@@ -6,14 +6,16 @@ import http from 'node:http';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
-const { inspect } = createRequire(import.meta.url)('../../agent-runtime/common/repository-checkpoint.js');
+const { inspect } = createRequire(import.meta.url)(process.env.PROOF_CHECKPOINT_MODULE || '../../agent-runtime/common/repository-checkpoint.js');
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'repository-proof-'));
 const source = path.join(root, 'source'), bare = path.join(root, 'remote.git'), workspace = path.join(root, 'workspace');
 await fs.mkdir(source); await fs.mkdir(workspace);
 const exec = promisify(execFile);
 const git = async (cwd, ...args) => (await exec('git', args, { cwd, encoding: 'utf8' })).stdout.trim();
-let requireAuth = false;
+let requireAuth = false, archiveTrap = null;
+const archiveSnapshots = [];
 const server = http.createServer(async (request, response) => {
+  if (archiveTrap) archiveSnapshots.push(await fs.readdir(archiveTrap));
   if (requireAuth && request.headers.authorization !== 'Basic ' + Buffer.from('proof:synthetic-fetch').toString('base64')) {
     response.writeHead(401, { 'www-authenticate': 'Basic realm="proof"' }).end(); return;
   }
@@ -71,9 +73,11 @@ try {
   assert.equal(authenticated.repositories[0].error, null);
   const oddScratch = path.join(root, "native-state space'quote"); await fs.mkdir(oddScratch);
   const oldTmp = process.env.TMPDIR;
-  try { process.env.TMPDIR = oddScratch; assert.equal((await inspect(workspace, configured, credentials)).repositories[0].error, null); }
-  finally { if (oldTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = oldTmp; }
-  assert.deepEqual(await fs.readdir(oddScratch), [], 'credential/object preflight scratch must not enter an ambient native-state TMPDIR');
+  try { process.env.TMPDIR = oddScratch; archiveTrap = oddScratch; assert.equal((await inspect(workspace, configured, credentials)).repositories[0].error, null); }
+  finally { archiveTrap = null; if (oldTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = oldTmp; }
+  assert(archiveSnapshots.length > 0);
+  assert(archiveSnapshots.every(snapshot => snapshot.length === 0), 'live credential/object scratch must not enter an ambient native-state TMPDIR');
+  assert.deepEqual(await fs.readdir(oddScratch), []);
 
   assert(!JSON.stringify(authenticated).includes('synthetic-fetch'));
   const oldGitDir = process.env.GIT_DIR;

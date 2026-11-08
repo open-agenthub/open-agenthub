@@ -28,3 +28,9 @@ when invoking `node tests/ProviderRepositoryProof/menu.cjs`. It overrides only t
 provider-switch API responses with explicit repository fixtures. It verifies menu closure,
 repository checks, omission acknowledgement, exact review binding and viewport bounds.
 This proves UI integration, not backend or native authorization. Screenshots stay in Files.
+
+The inspection proof observes an ambient native-state TMPDIR while the HTTP Git fetch is
+in flight. It must remain empty throughout, so a concurrent native archive cannot capture
+Git credential or object scratch. `PROOF_CHECKPOINT_MODULE=/absolute/baseline.cjs` runs the
+same controls against an extracted baseline module without editing/stashing the worktree.
+The afb7e74e module fails this live-location control; the 3f7ab22b module passes.
