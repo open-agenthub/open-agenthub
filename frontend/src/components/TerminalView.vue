@@ -961,4 +961,16 @@ function interruptWorkspaceAgent() {
   .tabs button { padding: 5px 6px; font-size: 11px; }
   .term-bar :deep(.model-switch) { flex-shrink: 1; min-width: 64px; }
 }
+/* A phone cannot hold the view switch and a title on one line. Rather than letting the row
+   overflow, it splits on purpose: title and "⋯" on the first line, the controls on the second.
+   512 px is the narrowest view in which an owner's bar still fits one row (measured in Chromium);
+   a 768 px window with the default sidebar leaves 520. */
+@container session-view (max-width: 511px) {
+  .term-bar { flex-wrap: wrap; row-gap: 8px; }
+  .back { order: -3; }
+  .head-main { order: -2; flex: 1 1 calc(100% - 80px); }
+  .term-bar :deep(.session-menu) { order: -1; }
+  .conn { margin-left: 0; }
+  .term-bar :deep(.model-switch) { flex: 1 1 0; min-width: 64px; max-width: none; }
+}
 </style>

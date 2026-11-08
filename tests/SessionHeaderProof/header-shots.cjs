@@ -9,7 +9,8 @@ const { chromium } = require(path.join(repo, 'agent-runtime/session-agent/node_m
 const appUrl = process.env.AGENTHUB_UI_URL || 'http://localhost:5173'
 const shots = process.env.SHOTS || path.join(process.cwd(), 'header-shots')
 const label = process.env.LABEL || 'after'
-const widths = [1280, 1024, 768]
+// 390 is a phone: there the bar splits into two rows on purpose (title and ⋯, then the controls).
+const widths = [1280, 1024, 768, 390]
 const views = [
   { name: 'owner', url: '/s/browser-test' },
   { name: 'viewer', url: '/s/viewer-session' },

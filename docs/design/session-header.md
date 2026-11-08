@@ -23,6 +23,9 @@ Continue locally, Share and the connection status as text. On a 1280 px screen i
   (not the viewport: the sidebar changes the width too) drops the Pause/Share labels and the
   "Model" caption below 860 px, then tightens spacing and lets the title and model id truncate
   below 720 px. Measured in Chromium: 56 px at 1280 and 1024, 52 px at 768 (view width 520 px).
+- **Phones split the bar on purpose.** Below a 512 px view (the narrowest in which an owner's
+  bar fits one row) the title and "⋯" take the first line and the controls the second, instead
+  of the row overflowing sideways: 90 px at 390.
 
 Roles are unchanged: a viewer and a shared-link reader see the view switch, the read-only model
 (viewer), "Read-only" and a menu with Files/Browser only.

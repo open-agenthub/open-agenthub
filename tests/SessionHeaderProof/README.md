@@ -1,7 +1,7 @@
 # Session header proof (#551)
 
 Screenshots and layout measurements of the Workspace session header in real Chromium, at
-1280, 1024 and 768 px, for an owner, a viewer (session shared with them) and a shared-link reader.
+1280, 1024, 768 and 390 px (phone: two rows by design), for an owner, a viewer (session shared with them) and a shared-link reader.
 
 `fixture.cjs` is a stand-in API on 127.0.0.1:8080 with explicit test data: a Codex session on a
 subscription account whose e-mail is long, a model list, a provider-switch status, open fleet
