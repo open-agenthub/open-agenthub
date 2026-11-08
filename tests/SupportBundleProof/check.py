@@ -2,6 +2,7 @@
 """Fail closed if a supplied canary appears anywhere in a collected bundle."""
 import argparse
 import json
+import sys
 from pathlib import Path
 
 
@@ -23,5 +24,5 @@ if __name__ == '__main__':
     parser.add_argument('bundle')
     parser.add_argument('canary_file', help='local JSON array; never commit actual canaries')
     args = parser.parse_args()
-    check(args.bundle, json.loads(Path(args.canary_file).read_text()))
+    check(args.bundle, json.load(sys.stdin) if args.canary_file == '-' else json.loads(Path(args.canary_file).read_text()))
     print('PASS: no supplied secret or user-content canary in the complete bundle')

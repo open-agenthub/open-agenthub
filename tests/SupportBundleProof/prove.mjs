@@ -50,11 +50,9 @@ function collect(label, logs) {
   const path = join(output, label + '.json');
   run('python3', ['scripts/support-bundle.py', '--namespace', 'agenthub', '--admin-url', base,
     '--output', path, ...(logs ? ['--include-backend-logs', '--log-lines', '1000'] : [])], credential + '\n');
-  writeFileSync(join(output, 'canaries.json'), JSON.stringify(canaries));
-  writeFileSync(join(output, 'canaries.txt'), canaries.join('\n') + '\n');
-  run('python3', ['tests/SupportBundleProof/check.py', path, join(output, 'canaries.json')]);
+  run('python3', ['tests/SupportBundleProof/check.py', path, '-'], JSON.stringify(canaries));
   let grepStatus = 0;
-  try { run('grep', ['-F', '-f', join(output, 'canaries.txt'), path]); } catch (e) { grepStatus = e.status; }
+  try { run('grep', ['-F', '-f', '-', path], canaries.filter(value => value && !/[\r\n]/.test(value)).join('\n') + '\n'); } catch (e) { grepStatus = e.status; }
   assert.equal(grepStatus, 1, 'literal grep must find no canary');
   const bundle = JSON.parse(readFileSync(path));
   assert.equal(statSync(path).mode & 0o777, 0o600);
@@ -85,11 +83,15 @@ try {
   const unknown = canary('unknown-schema-row');
   sql(`INSERT INTO schema_scripts(name, sha256) VALUES ('${unknown}', 'not-a-real-script');`);
   const logSecret = canary('backend-log-secret');
-  kubeInput(['exec', '-i', 'deployment/agenthub-backend', '-c', 'backend', '--', 'sh'],
-    `printf '%s\\n' '${logSecret}' 'short confidential prompt' 'Application started. Press Ctrl+C to shut down.' > /proc/1/fd/1\n`);
-  canaries.push('short confidential prompt');
-  const rawLogs = kube('logs', 'deployment/agenthub-backend', '-c', 'backend', '--all-pods=true', '--tail=1000');
-  assert(rawLogs.includes(logSecret), 'sensitive log canary must exist before collection');
+  // The hardened container cannot reopen PID 1 stdout. Real request logging supplies
+  // sensitive input through the normal server path instead of bypassing the runtime.
+  kube('set', 'env', 'deployment/agenthub-backend',
+    'Logging__LogLevel__Microsoft.AspNetCore.Hosting.Diagnostics=Information');
+  kube('rollout', 'status', 'deployment/agenthub-backend', '--timeout=180s');
+  await connect();
+  await (await fetch(base + '/support-proof/' + logSecret + '?prompt=' + prompt + '&secret=' + secretValue,
+    { signal: AbortSignal.timeout(15000) })).text();
+  await until(() => kube('logs', 'deployment/agenthub-backend', '-c', 'backend', '--all-pods=true', '--tail=1000').includes(logSecret));
   const normal = collect('api-default', false);
   assert.equal(normal.application.license.present, true);
   assert.equal(normal.application.license.valid, false);
@@ -124,7 +126,7 @@ try {
   const negative = join(output, 'negative.json');
   writeFileSync(negative, JSON.stringify({ newField: unknownValue }));
   let rejected = false;
-  try { run('python3', ['tests/SupportBundleProof/check.py', negative, join(output, 'canaries.json')]); } catch { rejected = true; }
+  try { run('python3', ['tests/SupportBundleProof/check.py', negative, '-'], JSON.stringify(canaries)); } catch { rejected = true; }
   assert(rejected);
   console.log('PASS: new-value leak negative control rejected; missing schema table returns null/unavailable');
 } finally {
