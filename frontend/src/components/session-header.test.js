@@ -74,6 +74,59 @@ describe('session bar (#551)', () => {
       expect(panel.find(`[${hook}]`).exists(), hook).toBe(true)
   })
 
+  it('names accounts in the menu as the person named them, with the full e-mail underneath', async () => {
+    mocks.api.listProviderAccounts.mockResolvedValue({ Claude: [
+      { id: 'work0001', label: 'Client project', email: longEmail, isDefault: true },
+      { id: 'home0002', label: '', email: 'me@example.com' }
+    ] })
+    wrapper = mountTerminal()
+    await flushPromises()
+    expect(wrapper.findAll('[data-account-option]').map(o => o.text())).toEqual(['Client project', 'me'])
+    expect(wrapper.get('[data-account-option="work0001"]').attributes('title')).toBe(`Client project — ${longEmail}`)
+    expect(wrapper.get('[data-account-identity]').text()).toBe(longEmail)
+  })
+
+  it('polls the provider switch only while its panel is open, though it stays mounted in the menu', async () => {
+    vi.useFakeTimers()
+    try {
+      wrapper = mountTerminal()
+      await flushPromises()
+      // One read on mount tells whether a replacement is already running.
+      expect(mocks.api.providerSwitchStatus).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(20000)
+      expect(mocks.api.providerSwitchStatus).toHaveBeenCalledTimes(1)
+      await wrapper.get('[data-session-menu-toggle]').trigger('click')
+      await wrapper.get('[data-provider-switch-open]').trigger('click')
+      await flushPromises()
+      const opened = mocks.api.providerSwitchStatus.mock.calls.length
+      await vi.advanceTimersByTimeAsync(4100)
+      expect(mocks.api.providerSwitchStatus.mock.calls.length).toBeGreaterThanOrEqual(opened + 2)
+      // Closed again: no more reads.
+      await wrapper.get('[data-session-menu-toggle]').trigger('click')
+      await wrapper.get('[data-provider-switch-open]').trigger('click')
+      await flushPromises()
+      const closed = mocks.api.providerSwitchStatus.mock.calls.length
+      await vi.advanceTimersByTimeAsync(20000)
+      expect(mocks.api.providerSwitchStatus).toHaveBeenCalledTimes(closed)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('marks the closed menu while a provider replacement is pending', async () => {
+    mocks.api.providerSwitchStatus.mockResolvedValue({ available: false,
+      operation: { request: { target: { agent: 'Codex' } }, progress: { phase: 'requested' } } })
+    wrapper = mountTerminal()
+    await flushPromises()
+    expect(wrapper.get('[data-session-menu-toggle]').attributes('aria-label')).toBe('Session menu — provider replacement running')
+    expect(wrapper.get('[data-provider-switch-open]').text()).toBe('Provider replacement…')
+    mocks.api.providerSwitchStatus.mockResolvedValue({ available: false, reason: 'Not now.' })
+  })
+
+  it('marks the closed menu when the session record says a replacement is held', async () => {
+    wrapper = mountTerminal({ session: session({ providerSwitchPending: true }) })
+    await flushPromises()
+    expect(wrapper.find('[data-session-menu-attention]').exists()).toBe(true)
+  })
+
   it('gives a viewer the view switch, the read-only model and Files only', async () => {
     wrapper = mountTerminal({ session: session({ accessRole: 'Viewer' }) })
     await flushPromises()

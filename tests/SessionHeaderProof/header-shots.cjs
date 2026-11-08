@@ -69,8 +69,44 @@ async function measure(page) {
       }
     }
   }
-  fs.writeFileSync(path.join(shots, `${label}-measurements.json`), JSON.stringify({ report, errors }, null, 2))
-  console.log(JSON.stringify({ report, errors }, null, 2))
+  // Keyboard and the menu's actions, owner at 1280 (only once the menu exists).
+  const keyboard = {}
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await page.goto(appUrl + '/s/browser-test')
+  await page.locator('.term-bar').waitFor()
+  await page.waitForTimeout(800)
+  const toggle = page.locator('[data-session-menu-toggle]')
+  if (await toggle.count()) {
+    const active = () => page.evaluate(() => {
+      const el = document.activeElement
+      if (!el) return null
+      const hook = [...el.attributes].map(a => a.name).find(n => n.startsWith('data-') && n !== 'data-menu-closes' && !n.startsWith('data-v-'))
+      return `${hook || el.tagName} "${(el.tagName === 'SELECT' ? '' : el.textContent).trim().slice(0, 30)}"`
+    })
+    await toggle.focus()
+    await page.keyboard.press('Enter')
+    await page.waitForTimeout(100)
+    keyboard.afterEnter = { expanded: await toggle.getAttribute('aria-expanded'), focus: await active() }
+    await page.keyboard.press('Tab')
+    keyboard.afterTab = await active()
+    await page.keyboard.press('ArrowDown')
+    keyboard.afterArrowDown = await active()
+    await page.keyboard.press('Escape')
+    keyboard.afterEscape = { expanded: await toggle.getAttribute('aria-expanded'), focus: await active() }
+    await toggle.click()
+    await page.locator('[data-send-message-toggle]').click()
+    keyboard.messagesPanelVisible = await page.locator('[data-send-message]').isVisible()
+    keyboard.menuClosedAfterItem = await toggle.getAttribute('aria-expanded')
+    await page.locator('[data-send-message-close]').click()
+    await toggle.click()
+    await page.locator('[data-provider-switch-open]').click()
+    await page.waitForTimeout(300)
+    keyboard.providerPanelVisible = await page.locator('[data-provider-panel]').isVisible()
+    await page.screenshot({ path: path.join(shots, `${label}-owner-1280-provider.png`), clip: { x: 0, y: 0, width: 1280, height: 400 } })
+    keyboard.connection = await page.locator('[data-connection-status]').getAttribute('aria-label')
+  }
+  fs.writeFileSync(path.join(shots, `${label}-measurements.json`), JSON.stringify({ report, keyboard, errors }, null, 2))
+  console.log(JSON.stringify({ report, keyboard, errors }, null, 2))
   await context.close()
   await browser.close()
 })().catch(e => { console.error(e); process.exit(1) })

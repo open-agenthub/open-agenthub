@@ -21,7 +21,7 @@ import { api, getSharedConversation } from '../api.js'
 import { repoShortName } from '../lib/text.js'
 import { fullMessageTime, shortMessageTime } from '../lib/message-time.js'
 import { terminalAttachmentPaths } from '../lib/attachments.js'
-import { accountLimitLabel, accountOptionLabel, accountsFor, authLabel, availableAlternatives, defaultAccountId, isAccountExhausted } from '../lib/agent.js'
+import { accountLimitLabel, accountOptionLabel, accountShortLabel, accountsFor, authLabel, availableAlternatives, defaultAccountId, isAccountExhausted } from '../lib/agent.js'
 import { conversationState, mergeConversationPage, toTranscriptItems } from '../lib/transcript.js'
 import { FLEET_WAITING, fleetLabel, pendingFleetMessages, sentEntry, stillPending, trackable } from '../lib/pending-messages.js'
 import { workspaceSent } from '../lib/session-drafts.js'
@@ -639,7 +639,7 @@ function interruptWorkspaceAgent() {
           <select :id="`acct-${session.id}`" data-account-select :value="pendingAccountId || currentAccountId" :disabled="accountBusy"
             aria-label="Provider account of this session" @change="chooseAccount">
             <option v-for="a in accountList" :key="a.id" :value="a.id" :data-account-option="a.id"
-              :data-account-exhausted="isAccountExhausted(a) ? 'true' : null">{{ accountOptionLabel(a) }}{{ isAccountExhausted(a) ? ` (${accountLimitLabel(a)})` : '' }}</option>
+              :data-account-exhausted="isAccountExhausted(a) ? 'true' : null" :title="accountOptionLabel(a)">{{ accountShortLabel(a, accountList) }}{{ isAccountExhausted(a) ? ` (${accountLimitLabel(a)})` : '' }}</option>
           </select>
           <span v-if="currentAccountIdentity" class="menu-hint" data-account-identity :title="currentAccountIdentity">{{ currentAccountIdentity }}</span>
         </div>
