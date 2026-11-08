@@ -20,3 +20,11 @@ For the combined proof dispatch `install-smoke.yml` on the feature branch with
 workspace allocation disabled, and asserts exact commits/branches, ignored/outside file
 omission and no session claims through Claude → Codex → Claude in both synthetic credential
 modes. A dispatched workflow must pass before this counts as native/kubelet acceptance.
+
+`menu.cjs` checks the actual merged Workspace entry through the session's `⋯` menu at
+1280 and 390 px. Run `tests/SessionHeaderProof/fixture.cjs` on localhost:8080 and the frontend
+Vite server on a browser-reachable origin, then set `PROOF_CDP`, `PROOF_URL` and `PROOF_OUT`
+when invoking `node tests/ProviderRepositoryProof/menu.cjs`. It overrides only the owner
+provider-switch API responses with explicit repository fixtures. It verifies menu closure,
+repository checks, omission acknowledgement, exact review binding and viewport bounds.
+This proves UI integration, not backend or native authorization. Screenshots stay in Files.
