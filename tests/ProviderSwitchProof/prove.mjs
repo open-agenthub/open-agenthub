@@ -235,8 +235,8 @@ try{
     await api('sessions/'+id+'/resume','POST');
     const resumed=await until(()=>{const value=pod();return value.status.phase==='Running'&&value.status.containerStatuses?.some(item=>item.name==='agent'&&item.ready)&&value;},'completed native pod resume');
     assert.notEqual(resumed.metadata.uid,current.metadata.uid);
-    if(claimName)assert.equal(json('-n',ns,'get','pvc',claimName).metadata.uid,claimUid);
-    else assert(pod().spec.volumes.find(volume=>volume.name==='workspace').emptyDir);
+    if(claimName){assert.equal(json('-n',ns,'get','pvc',claimName).metadata.uid,claimUid);}
+    else{assert(pod().spec.volumes.find(volume=>volume.name==='workspace').emptyDir);}
     assert.equal(fingerprint(),baseline);
     const restoredEnv=resumed.spec.containers.find(item=>item.name==='agent').env;
     assert.equal(restoredEnv.find(item=>item.name==='AGENTHUB_REQUIRE_NATIVE_RESUME').value,'1');
@@ -272,9 +272,9 @@ try{
      assert(held.status.containerStatuses.find(item=>item.name==='agent').state.terminated,'Never policy prevents automatic same-pod replay');
      await api('sessions/'+id+'/resume','POST');
      const recovered=await until(()=>{const value=pod();return value.metadata.uid!==held.metadata.uid&&value.status.containerStatuses?.some(item=>item.name==='agent'&&item.ready)&&value;},'owner explicitly resumes failed native generation');
-     if(claimName)assert.equal(json('-n',ns,'get','pvc',claimName).metadata.uid,claimUid);
-    else assert(pod().spec.volumes.find(volume=>volume.name==='workspace').emptyDir);
-    assert.equal(fingerprint(),baseline);
+     if(claimName){assert.equal(json('-n',ns,'get','pvc',claimName).metadata.uid,claimUid);}
+     else{assert(pod().spec.volumes.find(volume=>volume.name==='workspace').emptyDir);}
+     assert.equal(fingerprint(),baseline);
      const recoveredEnv=recovered.spec.containers.find(item=>item.name==='agent').env;
      assert.equal(recoveredEnv.find(item=>item.name==='AGENTHUB_REQUIRE_NATIVE_RESUME').value,'1');
      assert(!recoveredEnv.find(item=>item.name==='AGENTHUB_PROMPT').valueFrom);
