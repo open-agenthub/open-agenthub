@@ -93,61 +93,32 @@ public sealed class AdminController : ControllerBase
         if (!await IsAdminAsync(ct)) return Forbid();
         await _license.ReloadAsync(ct);
         var status = _license.Status;
-        var scripts = new List<object>();
-        var knownNames = new HashSet<string>(StringComparer.Ordinal)
+        List<object>? scripts = [];
+        string? schemaReason = null;
+        try
         {
-            "AllowedAgentsStore",
-            "ApiTokenStore",
-            "ChatBindingStore",
-            "ChatLinkCodeStore",
-            "EphemeralApiMcpStore",
-            "LibraryShareStore",
-            "LicenseStore",
-            "McpClientStore",
-            "McpServerStore",
-            "McpSigningKeyStore",
-            "PermissionStore",
-            "PortGrantStore",
-            "PostgresBrowserLeaseStore",
-            "PostgresExecutionUsageSnapshots",
-            "PostgresKeyRepository",
-            "PostgresModelCatalogStore",
-            "PostgresProjectStore",
-            "PostgresProviderSwitchStore",
-            "PostgresSecretRequestStore",
-            "PostgresSessionExecutionStore",
-            "PostgresSessionFileRegistry",
-            "PostgresSessionMessageStore",
-            "PostgresSessionOrderStore",
-            "PostgresSessionStore",
-            "PostgresSessionTransferTicketStore",
-            "PostgresSessionWorkspaceStore",
-            "PostgresUsageStore",
-            "PostgresWebhookTriggerStore",
-            "SessionShareStore",
-            "SingleUserOwnerStore",
-            "SkillEmbeddingStore",
-            "SkillStore",
-            "SlackThreadStore",
-            "UsageLimitStore",
-            "UserDirectory",
-            "UserGroupStore",
-            "UserRoleStore",
-        };
-        await using var connection = await PostgresDataSources.Shared(_cfg).OpenConnectionAsync(ct);
-        await using var command = new Npgsql.NpgsqlCommand(
-            "SELECT name, applied_at FROM schema_scripts ORDER BY name", connection);
-        await using var reader = await command.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+            await using var connection = await PostgresDataSources.Shared(_cfg).OpenConnectionAsync(ct);
+            await using var command = new Npgsql.NpgsqlCommand(
+                "SELECT name, applied_at FROM schema_scripts ORDER BY name", connection) { CommandTimeout = 5 };
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                var name = reader.GetString(0);
+                // Unknown database rows must not become a channel for customer content.
+                if (SchemaScript.DiagnosticNames.Contains(name))
+                    scripts.Add(new { name, appliedAt = reader.GetDateTime(1) });
+            }
+        }
+        catch (Npgsql.NpgsqlException)
         {
-            var name = reader.GetString(0);
-            // Unknown database rows must not become a channel for customer content.
-            if (knownNames.Contains(name))
-                scripts.Add(new { name, appliedAt = reader.GetDateTime(1) });
+            // Missing tracking tables and query failures must not prevent support collection;
+            // exception messages can contain SQL or connection details and never leave here.
+            scripts = null;
+            schemaReason = "unavailable";
         }
         return Ok(new
         {
-            schemaScripts = scripts,
+            schemaScripts = scripts, schemaReason,
             license = new
             {
                 edition = _license.Enabled ? "enterprise" : "community",

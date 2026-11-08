@@ -5,10 +5,10 @@ name: Quickstart install
 # The scripts themselves are tested in the open-agenthub.github.io repository.
 on:
   pull_request:
-    paths: ["backend/**", "ee/backend/**", "helm/**", ".github/workflows/install-smoke.yml", "tests/InstallSmokeProof/**"]
+    paths: ["backend/**", "ee/backend/**", "helm/**", ".github/workflows/install-smoke.yml", "tests/InstallSmokeProof/**", "scripts/support-bundle.py", "tests/SupportBundleProof/**"]
   push:
     branches: [main]
-    paths: ["backend/**", "ee/backend/**", "helm/**", ".github/workflows/install-smoke.yml", "tests/InstallSmokeProof/**"]
+    paths: ["backend/**", "ee/backend/**", "helm/**", ".github/workflows/install-smoke.yml", "tests/InstallSmokeProof/**", "scripts/support-bundle.py", "tests/SupportBundleProof/**"]
   schedule:
     - cron: "23 3 * * *"
   workflow_dispatch:
@@ -67,6 +67,8 @@ jobs:
       SCRIPTS: https://raw.githubusercontent.com/open-agenthub/open-agenthub.github.io/main
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
 
       - name: Fetch the quickstart and its smoke test
         env:
@@ -173,6 +175,19 @@ jobs:
         env:
           KUBECONFIG: /etc/rancher/k3s/k3s.yaml
         run: bash /tmp/install-smoke.sh default
+
+      - name: Prove support bundle excludes secrets and customer content
+        timeout-minutes: 10
+        env:
+          KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        run: |
+          python3 tests/SupportBundleProof/schema-names.py
+          if git diff --quiet HEAD^ HEAD -- scripts/support-bundle.py tests/SupportBundleProof backend/Controllers/AdminController.cs backend/Persistence/SchemaScript.cs .github/workflows/install-smoke.yml; then
+            echo 'Support diagnostics unchanged; skip the cluster proof.'
+            exit 0
+          fi
+          python3 tests/SupportBundleProof/projections.py
+          node tests/SupportBundleProof/prove.mjs
 
       - name: Prove object-storage egress isolation
         if: github.event_name == 'workflow_dispatch' && inputs.prove_storage_egress

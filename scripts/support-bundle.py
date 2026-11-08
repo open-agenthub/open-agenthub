@@ -147,7 +147,10 @@ def admin_projection(url, credential):
         if type(value) is bool:
             result['oidc'][key] = value
     # Names are compiled into the server allow-list, not taken from arbitrary SQL text.
-    for row in raw.get('schemaScripts', []):
+    if raw.get('schemaScripts') is None:
+        result['schemaScripts'] = None
+        result['schemaReason'] = 'unavailable'
+    for row in raw.get('schemaScripts') or []:
         name, date = row.get('name'), row.get('appliedAt')
         if name in SCHEMA_NAMES and isinstance(date, str) and re.fullmatch(r'\d{4}-\d\d-\d\dT[0-9:.]+(?:Z|[+-]\d\d:\d\d)', date):
             result['schemaScripts'].append({'name': name, 'appliedAt': date})
