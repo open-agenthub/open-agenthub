@@ -12,7 +12,8 @@ for (const name of ['first', 'second']) {
  const git = args => execFileSync('git', args, { cwd: work, stdio: 'pipe' });
  git(['init', '-q', '-b', 'main']); git(['config', 'user.name', 'Proof']); git(['config', 'user.email', 'proof@example.com']);
  fs.writeFileSync(path.join(work, 'tracked.txt'), name + ' baseline\n');
- git(['add', 'tracked.txt']); git(['commit', '-qm', 'Proof baseline']); git(['clone', '--bare', work, bare]);
+ fs.writeFileSync(path.join(work, '.gitignore'), '.env\nnode_modules/\n');
+ git(['add', 'tracked.txt', '.gitignore']); git(['commit', '-qm', 'Proof baseline']); git(['clone', '--bare', work, bare]);
  execFileSync('git', ['--git-dir=' + bare, 'update-server-info'], { stdio: 'pipe' });
 }
 let sequence = 0;

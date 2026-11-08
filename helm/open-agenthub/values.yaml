@@ -104,6 +104,8 @@ sharing:
   userSuggestionsEnabled: true
 
 agent:
+  # Admission is independent of allocating persistent workspace claims.
+  repositoryProviderSwitchEnabled: false
   workspaceVolume:
     # One PVC per new supported interactive session; 10Gi is requested per session.
     # local-path on single-node k3s persists on that node only and is not a backup.

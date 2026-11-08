@@ -17,6 +17,10 @@ on:
         description: "Prove real CLI provider replacement on a real persistent workspace"
         type: boolean
         default: false
+      prove_provider_emptydir:
+        description: "Prove real CLI replacement with code restored from Git and no PVC"
+        type: boolean
+        default: false
       prove_provider_recovery:
         description: "Crash backend replicas at every saved native replacement phase"
         type: boolean
@@ -122,7 +126,7 @@ jobs:
           cache-from: type=gha,scope=artifact-renderer-amd64
 
       - name: Build native Claude for provider replacement proof
-        if: github.event_name == 'workflow_dispatch' && (inputs.prove_provider_switch || inputs.prove_provider_recovery)
+        if: github.event_name == 'workflow_dispatch' && (inputs.prove_provider_switch || inputs.prove_provider_recovery || inputs.prove_provider_emptydir)
         uses: docker/build-push-action@v7
         with:
           context: ./agent-runtime
@@ -133,7 +137,7 @@ jobs:
           cache-from: type=gha,scope=agent-runtime-claude-amd64
 
       - name: Build native Codex for provider replacement proof
-        if: github.event_name == 'workflow_dispatch' && (inputs.prove_provider_switch || inputs.prove_provider_recovery)
+        if: github.event_name == 'workflow_dispatch' && (inputs.prove_provider_switch || inputs.prove_provider_recovery || inputs.prove_provider_emptydir)
         uses: docker/build-push-action@v7
         with:
           context: ./agent-runtime
@@ -202,9 +206,10 @@ jobs:
         run: bash tests/ProviderWorkspaceProof/prove.sh
 
       - name: Prove real native provider replacement
-        if: github.event_name == 'workflow_dispatch' && (inputs.prove_provider_switch || inputs.prove_provider_recovery)
+        if: github.event_name == 'workflow_dispatch' && (inputs.prove_provider_switch || inputs.prove_provider_recovery || inputs.prove_provider_emptydir)
         env:
           PROOF_RECOVERY: ${{ inputs.prove_provider_recovery && '1' || '0' }}
+          PROOF_REPOSITORY: ${{ inputs.prove_provider_emptydir && '1' || '0' }}
           PROOF_RECOVERY_SCOPE: ${{ inputs.provider_recovery_scope || 'journal' }}
         run: bash tests/ProviderSwitchProof/prove.sh
 

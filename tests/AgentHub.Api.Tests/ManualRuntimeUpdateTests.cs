@@ -35,6 +35,9 @@ public class ManualRuntimeUpdateTests
     {
         await using var rig = await Rig.Start(agent, "terminal", false, 200);
         rig.Record.ExecutionGeneration = 2;
+        rig.Record.ReposJson = "[{\"Url\":\"https://example.com/repo.git\",\"Branch\":\"work/proof\"}]";
+        rig.Checkpoint = new(1, "repository", [new(0, "repo", "work/proof", new string('a', 40),
+            "refs/heads/work/proof", new string('a', 40), 0, 0, new(0, [], 0), 0, null)], new(0, [], 0));
         rig.Record.Prompt = "Original source task must not run again.";
         var update = rig.Http.PostAsync("/api/sessions/session/pause-and-resume-runtime", null);
         await rig.DeleteStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
@@ -46,6 +49,18 @@ public class ManualRuntimeUpdateTests
         Assert.Contains(env, item => item.Name == "AGENTHUB_NATIVE_SESSION_ID" && item.Value == rig.Record.AgentSessionId);
         Assert.Contains(env, item => item.Name == "AGENTHUB_PROMPT" && item.Value == "");
         Assert.Equal("conversation", rig.Record.AgentSessionId);
+    }
+
+    [Fact]
+    public async Task MissingRepositoryCheckpointRefusesBeforeDeletingTheSurvivingPod()
+    {
+        await using var rig = await Rig.Start(AgentKind.Codex, "terminal", false, 200);
+        rig.Record.ExecutionGeneration = 2;
+        using var response = await rig.Http.PostAsync("/api/sessions/session/resume", null);
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.False(rig.Deleting);
+        Assert.Null(rig.CreatedPod);
+        Assert.Equal("Running", rig.Record.Status);
     }
 
     [Fact]
@@ -126,6 +141,7 @@ public class ManualRuntimeUpdateTests
         private Kubernetes _cluster = null!;
         public HttpClient Http = null!;
         public SessionRecord Record = null!;
+        public RepositoryCheckpoint? Checkpoint;
         public volatile bool Deleting, OldPodGone;
         public bool ArchiveAvailable = true, StorageConfigured = true, ArchiveCheckedAfterDeletion;
         public int DeleteGrace;
@@ -197,7 +213,9 @@ public class ManualRuntimeUpdateTests
                     ? Task.FromResult<IReadOnlyList<ProjectInfo>>([]) : null), artifacts, RuntimeProofProxy.Make<IBrowserService>(), RuntimeProofProxy.Make<IGitAuthService>(),
                 new UsageLimitService(RuntimeProofProxy.Make<IUsageStore>(), RuntimeProofProxy.Make<IPersonalUsageLimitSource>(), []), new AllowAllAgentsProvider(), null!, null!,
                 new InMemoryEphemeralApiMcpStore(), null!, NullLogger<KubernetesSessionService>.Instance, runtimeUpdateLock: new MemoryLock(), cluster: _cluster,
-                podRequests: TestPods.Live(new HttpClient()));
+                podRequests: TestPods.Live(new HttpClient()),
+                providerSwitches: RuntimeProofProxy.Make<IProviderSwitchStore>((method, _) => method.Name == "RepositoryCheckpointAsync"
+                    ? Task.FromResult(Checkpoint) : null));
         }
         // Answers only for the key the pod uploads to: a check under any other key (the raw owner
         // name, for instance) finds nothing, as it would against real object storage.

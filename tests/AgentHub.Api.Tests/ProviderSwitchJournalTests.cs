@@ -11,6 +11,44 @@ public class ProviderSwitchJournalTests
         AgentKind.Claude, "source-pod", "workspace-uid", new(AgentKind.Codex, AgentAuthMode.Subscription,
             "target-account", null, null), "Reviewed handover. Omitted: native resume state.");
 
+    [Fact]
+    public void RepositoryReviewPinsCodeAndOmissionsRatherThanTheMovingRemoteTip()
+    {
+        var entry = new RepositoryCheckpointEntry(0, "repo", "work/proof", new string('a', 40),
+            "refs/heads/work/proof", new string('a', 40), 0, 0, new(1, [".env"], 0), 0, null);
+        var manifest = new RepositoryCheckpoint(1, "repository", [entry], new(0, [], 0));
+        Assert.Equal(manifest.ReviewHash, (manifest with { Repositories = [entry with { RemoteTip = new string('b', 40) }] }).ReviewHash);
+        Assert.NotEqual(manifest.ReviewHash, (manifest with { Repositories = [entry with { Commit = new string('b', 40) }] }).ReviewHash);
+        Assert.NotEqual(manifest.ReviewHash, (manifest with { Outside = new(1, ["scratch.txt"], 0) }).ReviewHash);
+    }
+
+    [PostgreSqlFact]
+    public async Task RepositoryIdentitySurvivesAdmissionAndNeedsFinalCodeVerification()
+    {
+        await using var database = await PostgresSharingDatabase.CreateAsync(pooling: false);
+        await database.Sessions.UpsertAsync(new SessionRecord { Id = "s", Owner = "alice", CallbackToken = "source",
+            AgentSessionId = "native", Agent = AgentKind.Claude });
+        var manifest = new RepositoryCheckpoint(1, "repository", [new(0, "repo", "work/proof", new string('a', 40),
+            "refs/heads/work/proof", new string('a', 40), 0, 0, new(1, [".env"], 0), 0, null)], new(1, ["scratch.txt"], 0));
+        var request = Request() with { ClaimUid = null, Repositories = manifest };
+        var journal = new PostgresProviderSwitchStore(database.Configuration, new PostgresExecutionFence(database.Configuration));
+        await journal.InitializeAsync();
+        await journal.CreateAsync("alice", request);
+        await journal.MoveAsync("alice", "s", request.RequestId, "requested", new("prepared"));
+        await journal.MoveAsync("alice", "s", request.RequestId, "prepared", new("stopping"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => journal.MoveAsync("alice", "s", request.RequestId,
+            "stopping", new("source-stopped", SourceStopAcknowledged: true)));
+        await journal.MoveAsync("alice", "s", request.RequestId, "stopping",
+            new("source-stopped", SourceStopAcknowledged: true, RepositoryStopVerified: true));
+        await journal.AdmitTargetAsync("alice", "s", request.RequestId);
+        var reopened = new PostgresProviderSwitchStore(database.Configuration, new PostgresExecutionFence(database.Configuration));
+        Assert.Equal(manifest.ReviewHash, (await reopened.RepositoryCheckpointAsync("alice", "s", 1))!.ReviewHash);
+        Assert.Null(await reopened.RepositoryCheckpointAsync("bob", "s", 1));
+        Assert.Null(await reopened.RepositoryCheckpointAsync("alice", "s", 2));
+        Assert.False((await database.Sessions.GetAsync("alice", "s"))!.WorkspacePersistent);
+        Assert.Equal(1, (await database.Sessions.GetAsync("alice", "s"))!.ExecutionGeneration);
+    }
+
     [PostgreSqlFact]
     public async Task AdmissionIsOwnedExclusiveDurableAndRotatesAuthorityExactlyOnce()
     {

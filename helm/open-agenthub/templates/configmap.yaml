@@ -23,6 +23,7 @@ data:
   AgentHub__CursorAgentImage: {{ include "agenthub.cursorAgentImage" . | quote }}
   AgentHub__OpenClawAgentImage: {{ include "agenthub.openclawAgentImage" . | quote }}
   AgentHub__OpenCodeAgentImage: {{ include "agenthub.opencodeAgentImage" . | quote }}
+  AgentHub__RepositoryProviderSwitchEnabled: {{ .Values.agent.repositoryProviderSwitchEnabled | quote }}
   AgentHub__WorkspaceVolumePersistent: {{ .Values.agent.workspaceVolume.persistent | quote }}
   AgentHub__WorkspaceVolumeSize: {{ .Values.agent.workspaceVolume.size | quote }}
   AgentHub__WorkspaceVolumeStorageClass: {{ .Values.agent.workspaceVolume.storageClass | quote }}

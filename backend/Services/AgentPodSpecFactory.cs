@@ -36,6 +36,7 @@ public sealed record AgentPodRuntimeSettings
 public sealed record PodBuildContext
 {
     public SessionWorkspace? Workspace { get; init; }
+    public RepositoryCheckpoint? RepositoryCheckpoint { get; init; }
     public string? ProviderSwitchRequestId { get; init; }
     public string? InitialPromptOverride { get; init; }
     public required string Owner { get; init; }
@@ -148,6 +149,7 @@ public static class AgentPodSpecFactory
     {
         var images = context.RuntimeImages;
         var runtimeImage = RuntimeImage(record.Agent, images);
+        context.RepositoryCheckpoint?.Validate();
         var repos = NormalizeRepos(request);
         var hasRepo = repos.Count > 0;
         var hasMcp = !string.IsNullOrWhiteSpace(request.McpConfigJson);
@@ -568,7 +570,14 @@ public static class AgentPodSpecFactory
 
         if (hasRepo || context.Workspace is not null)
         {
-            var reposEnv = string.Join("\n", DestFor(repos).Select(x => $"{x.dest}\t{x.repo.Branch}\t{x.repo.Url}"));
+            var destinations = DestFor(repos).ToList();
+            if (context.RepositoryCheckpoint is { } checkpoint && (checkpoint.Repositories.Count != destinations.Count
+                || checkpoint.Repositories.Where((item, index) => item.Destination != destinations[index].dest).Any()))
+                throw new InvalidOperationException("The recorded repository layout changed.");
+            var reposEnv = string.Join("\n", destinations.Select((x, index) =>
+                $"{x.dest}\t{(context.RepositoryCheckpoint is { } pinned ? pinned.Repositories[index].RemoteBranch![11..] : x.repo.Branch)}\t{x.repo.Url}"));
+            var checkpoints = context.RepositoryCheckpoint is null ? "" : string.Join("\n", context.RepositoryCheckpoint.Repositories.Select(item =>
+                $"{item.Destination}\t{item.Branch}\t{item.RemoteBranch}\t{item.Commit}"));
             const string cloneScript = """
                 set -e
                 if [ -f /secrets/creds/ssh_key ]; then
@@ -695,6 +704,17 @@ public static class AgentPodSpecFactory
                   fi
                   printf '%s\n' "$output" | redact
                 done
+                if [ -n "$REPOSITORY_CHECKPOINTS" ]; then
+                  printf '%s\n' "$REPOSITORY_CHECKPOINTS" | while IFS="$TAB" read -r dest branch remote_ref commit; do
+                    # A moved remote tip does not authorize changing the code selected by the owner.
+                    directory="/workspace/$dest"
+                    git -C "$directory" merge-base --is-ancestor "$commit" "origin/${remote_ref#refs/heads/}"
+                    git -C "$directory" checkout -B "$branch" "$commit" --
+                    git -C "$directory" branch --set-upstream-to="origin/${remote_ref#refs/heads/}" -- "$branch"
+                    [ "$(git -C "$directory" rev-parse HEAD)" = "$commit" ]
+                    [ "$(git -C "$directory" symbolic-ref --short HEAD)" = "$branch" ]
+                  done
+                fi
                 echo "Clone finished."
                 """;
             initContainers.Add(new V1Container
@@ -705,6 +725,7 @@ public static class AgentPodSpecFactory
                 Env = new List<V1EnvVar>
                 {
                     new() { Name = "REPOS", Value = reposEnv },
+                    new() { Name = "REPOSITORY_CHECKPOINTS", Value = checkpoints },
                     new() { Name = "WORKSPACE_FINGERPRINT", Value = SessionWorkspaceVolumes.Fingerprint(context.Workspace?.Repositories ?? "[]") },
                     new() { Name = "HOME", Value = home }
                 },
@@ -790,7 +811,7 @@ public static class AgentPodSpecFactory
             : new List<RepoRef> { new() { Url = request.RepoUrl!, Branch = request.RepoBranch } };
     }
 
-    private static IEnumerable<(RepoRef repo, string dest)> DestFor(List<RepoRef> repos)
+    internal static IEnumerable<(RepoRef repo, string dest)> DestFor(IReadOnlyList<RepoRef> repos)
     {
         if (repos.Count == 1) { yield return (repos[0], "repo"); yield break; }
         var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

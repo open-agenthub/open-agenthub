@@ -694,6 +694,54 @@ public class AgentPodSpecFactoryTests
     }
 
     [Fact]
+    public async Task RepositoryCloneRestoresRecordedAncestorOnNamedBranch()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var scratch = Path.Join(Path.GetTempPath(), "repository-clone-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(scratch);
+        try
+        {
+            async Task<string> Git(params string[] args)
+            {
+                var info = new System.Diagnostics.ProcessStartInfo("git") { WorkingDirectory = scratch,
+                    RedirectStandardOutput = true, RedirectStandardError = true };
+                foreach (var arg in args) info.ArgumentList.Add(arg);
+                using var child = System.Diagnostics.Process.Start(info)!;
+                var output = child.StandardOutput.ReadToEndAsync(); var error = child.StandardError.ReadToEndAsync();
+                await child.WaitForExitAsync(); Assert.True(child.ExitCode == 0, await error);
+                return (await output).Trim();
+            }
+            await Git("init", "-qb", "work/remote", "source");
+            await Git("-C", "source", "-c", "user.name=Proof", "-c", "user.email=proof@example.com", "commit", "--allow-empty", "-qm", "Recorded commit");
+            var commit = await Git("-C", "source", "rev-parse", "HEAD");
+            await Git("-C", "source", "-c", "user.name=Proof", "-c", "user.email=proof@example.com", "commit", "--allow-empty", "-qm", "Later remote tip");
+            var tip = await Git("-C", "source", "rev-parse", "HEAD");
+            await Git("clone", "--bare", "source", "remote.git");
+            var manifest = new RepositoryCheckpoint(1, "repository", [new(0, "repo", "work/local", commit,
+                "refs/heads/work/remote", tip, 0, 0, new(0, [], 0), 0, null)], new(0, [], 0));
+            var request = new CreateSessionRequest { Agent = AgentKind.Claude, AuthMode = AgentAuthMode.ApiKey,
+                Repos = [new() { Url = Path.Join(scratch, "remote.git"), Branch = "original-branch-no-longer-used" }] };
+            var pod = AgentPodSpecFactory.Build(Record(AgentKind.Claude, AgentAuthMode.ApiKey, SessionMode.Interactive),
+                request, Context() with { RepositoryCheckpoint = manifest });
+            Assert.NotNull(Assert.Single(pod.Volumes, volume => volume.Name == "workspace").EmptyDir);
+            var clone = Assert.Single(pod.InitContainers, container => container.Name == "git-clone");
+            var script = clone.Command[2].Replace("/workspace/", scratch + "/workspace/");
+            Directory.CreateDirectory(Path.Join(scratch, "workspace"));
+            var start = new System.Diagnostics.ProcessStartInfo("/bin/sh") { RedirectStandardOutput = true, RedirectStandardError = true };
+            start.ArgumentList.Add("-c"); start.ArgumentList.Add(script);
+            foreach (var variable in clone.Env.Where(item => item.Value is not null)) start.Environment[variable.Name] = variable.Value;
+            start.Environment["HOME"] = scratch;
+            using var shell = System.Diagnostics.Process.Start(start)!;
+            var stdout = shell.StandardOutput.ReadToEndAsync(); var stderr = shell.StandardError.ReadToEndAsync();
+            await shell.WaitForExitAsync(); Assert.True(shell.ExitCode == 0, await stdout + await stderr);
+            Assert.Equal(commit, await Git("-C", "workspace/repo", "rev-parse", "HEAD"));
+            Assert.Equal("work/local", await Git("-C", "workspace/repo", "symbolic-ref", "--short", "HEAD"));
+            Assert.Equal("origin/work/remote", await Git("-C", "workspace/repo", "rev-parse", "--abbrev-ref", "@{upstream}"));
+        }
+        finally { Directory.Delete(scratch, true); }
+    }
+
+    [Fact]
     public async Task CloneScript_RealMissingBranchPreservesExitCodeAndDefaultBranch()
     {
         if (OperatingSystem.IsWindows()) return;

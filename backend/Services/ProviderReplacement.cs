@@ -14,10 +14,10 @@ namespace AgentHub.Api.Services;
 public sealed class ProviderReplacementRefusedException(string message) : InvalidOperationException(message);
 
 public sealed record ProviderSwitchSelection(Guid RequestId, ProviderSwitchTarget Target,
-    HandoverPreviewRequest Handover, string? ReviewHash = null);
+    HandoverPreviewRequest Handover, string? ReviewHash = null, bool AcknowledgeOmissions = false, string? RepositoryHash = null);
 public sealed record ProviderSwitchReview(string Text, string ReviewHash, ProviderSwitchTarget Target,
-    HandoverCapacity Capacity, string Policy);
-public sealed record ProviderSwitchAvailability(bool Available, string Reason, ProviderSwitchOperation? Operation, IReadOnlyList<ExecutionUsageSnapshot>? CompletedUsage = null);
+    HandoverCapacity Capacity, string Policy, RepositoryCheckpoint? Repositories = null);
+public sealed record ProviderSwitchAvailability(bool Available, string Reason, ProviderSwitchOperation? Operation, IReadOnlyList<ExecutionUsageSnapshot>? CompletedUsage = null, bool RepositoryBacked = false);
 
 public sealed partial class KubernetesSessionService
 {
@@ -29,8 +29,7 @@ public sealed partial class KubernetesSessionService
     private const string ReplacementAnnotation = "agenthub.dev/provider-switch";
     private const string ExecutionAnnotation = "agenthub.dev/execution";
     private static string? Unavailable(SessionRecord record, bool enabled) =>
-        !record.WorkspacePersistent ? "Switching not available for this session: its workspace uses emptyDir. Migration is not supported; create a new persistent-workspace session."
-        : !enabled ? "Switching not available for this session: the administrator has disabled persistent-workspace switch admission."
+        !enabled ? "Switching not available for this session: the administrator has disabled admission for this workspace type."
         : !SessionWorkspaceVolumes.Supported(record) ? "Switching requires a packaged, non-root Claude or Codex interactive terminal."
         : record.ProviderSwitchPending ? "A provider replacement is already pending."
         : null;
@@ -38,33 +37,40 @@ public sealed partial class KubernetesSessionService
     public async Task<ProviderSwitchAvailability> ProviderSwitchStatusAsync(string owner, string id, CancellationToken ct)
     {
         var record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
-        var reason = Unavailable(record, _opts.WorkspaceVolumePersistent)
+        var reason = Unavailable(record, (record.WorkspacePersistent ? _opts.WorkspaceVolumePersistent : _opts.RepositoryProviderSwitchEnabled))
             ?? (_workspaceVolumes is null || _providerSwitches is null || _executions is null || !_artifacts.IsConfigured || _runtimeUpdateLock is null || _podRequests is null || _switchMessages is null || _switchDelivery is null
                 ? "Switching requires configured state storage and lifecycle services." : null);
         if (reason is null) reason = SourceRuntimeReason(record, await TryReadPodAsync("session-" + id, ct), null);
         return new(reason is null, reason ?? "Available at a completed-turn safe point after review.",
             _providerSwitches is null ? null : await _providerSwitches.GetAsync(owner, id, ct),
-            _executionUsage is null ? null : await _executionUsage.ReadAsync(owner, id, ct));
+            _executionUsage is null ? null : await _executionUsage.ReadAsync(owner, id, ct), !record.WorkspacePersistent);
     }
 
     public async Task<ProviderSwitchReview> ReviewProviderSwitchAsync(string owner, string id, ProviderSwitchSelection selection, CancellationToken ct)
     {
         var record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
-        if (Unavailable(record, _opts.WorkspaceVolumePersistent) is { } reason) throw new ProviderReplacementRefusedException(reason);
+        if (Unavailable(record, (record.WorkspacePersistent ? _opts.WorkspaceVolumePersistent : _opts.RepositoryProviderSwitchEnabled)) is { } reason) throw new ProviderReplacementRefusedException(reason);
         if (_workspaceVolumes is null || _providerSwitches is null || _executions is null || _runtimeUpdateLock is null || _podRequests is null || _switchMessages is null || _switchDelivery is null || !_artifacts.IsConfigured)
             throw new ProviderReplacementRefusedException("Provider switching requires configured state storage and lifecycle services.");
         if (selection.RequestId == Guid.Empty || selection.Target.Agent == record.Agent || selection.Handover.Target != selection.Target.Agent)
             throw new ArgumentException("Choose the other supported provider and a replacement request ID.");
         var target = await PreflightProviderTargetAsync(record, selection.Target, ct);
         var pod = await RequireSourcePodAsync(record, null, ct);
-        var workspace = await _workspaceVolumes!.EnsureAsync(record, ct) ?? throw new ProviderReplacementRefusedException("Recorded workspace is missing.");
+        var workspace = record.WorkspacePersistent
+            ? await _workspaceVolumes!.EnsureAsync(record, ct) ?? throw new ProviderReplacementRefusedException("Recorded workspace is missing.") : null;
+        var repositories = record.WorkspacePersistent ? null : await InspectProviderRepositoriesAsync(owner, record, pod, ct);
+        repositories?.Validate();
+        if (repositories is not null && repositories.ReviewHash != selection.RepositoryHash)
+            throw new ProviderReplacementRefusedException("Repository checks changed. Check again and review the omitted files before switching.");
+        if (repositories is not null && !selection.AcknowledgeOmissions)
+            throw new ProviderReplacementRefusedException("Acknowledge that ignored files and files outside repositories will not carry over.");
         var framed = HandoverPreviewBuilder.Build(selection.Handover).Text.Replace("Provider handover preview to", "Provider handover to", StringComparison.Ordinal)
             + $"\n\nReplacement request: {selection.RequestId:D}";
         if (framed.Length > HandoverPreviewBuilder.MaxCharacters) throw new ArgumentException("Handover including request marker exceeds 16000 characters.");
         var capacity = await TargetCapacityAsync(owner, target, framed, ct);
-        var digest = ReviewDigest(record, pod.Metadata.Uid, workspace.ClaimUid!, target, selection.RequestId, framed);
+        var digest = ReviewDigest(record, pod.Metadata.Uid, workspace?.ClaimUid ?? repositories!.ReviewHash, target, selection.RequestId, framed);
         return new(framed, digest, target, capacity,
-            "The session's approval mode, tool restrictions, MCP access, secret selection and network policy are preserved. Previous approvals are not transferred. Only the reviewed text enters fresh native context; visible history is not model context.");
+            "The session's approval mode, tool restrictions, MCP access, secret selection and network policy are preserved. Previous approvals are not transferred. Only the reviewed text enters fresh native context; visible history is not model context.", repositories);
     }
 
     public async Task<ProviderSwitchOperation> StartProviderSwitchAsync(string owner, string id, ProviderSwitchSelection selection, CancellationToken ct)
@@ -83,10 +89,10 @@ public sealed partial class KubernetesSessionService
         if (selection.ReviewHash != review.ReviewHash) throw new ProviderReplacementRefusedException("The reviewed selection or source changed. Review the handover again.");
         var record = (await _store.GetAsync(owner, id, ct))!;
         var pod = await RequireSourcePodAsync(record, null, ct);
-        var workspace = (await _workspaceVolumes!.EnsureAsync(record, ct))!;
+        var workspace = record.WorkspacePersistent ? (await _workspaceVolumes!.EnsureAsync(record, ct))! : null;
         await _executions!.EnsureLegacyAsync(owner, id, ct);
         await journal.CreateAsync(owner, new(selection.RequestId, id, record.ExecutionGeneration, record.Agent,
-            pod.Metadata.Uid, workspace.ClaimUid!, review.Target, review.Text, review.ReviewHash), ct);
+            pod.Metadata.Uid, workspace?.ClaimUid, review.Target, review.Text, review.ReviewHash, review.Repositories), ct);
         return (await journal.GetAsync(owner, id, ct))!;
     }
 
@@ -225,8 +231,11 @@ public sealed partial class KubernetesSessionService
                 await FinishProviderCancellationAsync(record, request, progress, ct);
                 return;
             }
-            var workspace = await _workspaceVolumes!.EnsureAsync(record, ct) ?? throw new ProviderReplacementRefusedException("Workspace is unavailable.");
-            if (workspace.ClaimUid != request.ClaimUid) throw new ProviderReplacementRefusedException("Workspace identity changed.");
+            var workspace = record.WorkspacePersistent ? await _workspaceVolumes!.EnsureAsync(record, ct)
+                ?? throw new ProviderReplacementRefusedException("Workspace is unavailable.") : null;
+            if ((workspace is null) != (request.Repositories is not null) || workspace?.ClaimUid != request.ClaimUid)
+                throw new ProviderReplacementRefusedException("Workspace identity changed.");
+            request.Repositories?.Validate();
             if (progress.Phase == "requested")
             {
                 if (record.ExecutionGeneration != request.SourceGeneration || record.Agent != request.SourceAgent)
@@ -238,6 +247,7 @@ public sealed partial class KubernetesSessionService
                 await RefuseReplacementHelpersAsync(record, ct);
                 var source = await RequireSourcePodAsync(record, request.SourcePodUid, ct);
                 var reserved = await RuntimeSwitchAsync(record, source, HttpMethod.Post, new { requestId = request.RequestId, action = "prepare" }, ct);
+                if (request.Repositories is not null) await RequireUnchangedProviderRepositoriesAsync(record, source, request.Repositories, ct);
                 if (!reserved.Checkpointed || string.IsNullOrWhiteSpace(reserved.NativeId)) throw new ProviderReplacementRefusedException("Source checkpoint was not acknowledged.");
                 var sourceText = await ReadTargetTranscriptAsync(record, source, ct, tail: true);
                 if (string.IsNullOrEmpty(sourceText) || NativeTranscript.Parse(sourceText).Count == 0)
@@ -253,6 +263,8 @@ public sealed partial class KubernetesSessionService
                 await PreflightProviderTargetAsync(record, request.Target, ct);
                 await TargetCapacityAsync(owner, request.Target, request.Handover, ct);
                 await RefuseReplacementHelpersAsync(record, ct);
+                if (request.Repositories is not null)
+                    await RequireUnchangedProviderRepositoriesAsync(record, await RequireSourcePodAsync(record, request.SourcePodUid, ct), request.Repositories, ct);
                 progress = progress with { Phase = "stopping" };
                 await _providerSwitches.MoveAsync(owner, id, request.RequestId, "prepared", progress, ct);
             }
@@ -270,6 +282,14 @@ public sealed partial class KubernetesSessionService
                     progress = progress with { SourceStopAcknowledged = true, SourceEntries = RetainedSource(NativeTranscript.Parse(finalText), request.SourceGeneration, request.SourceAgent) };
                     await _providerSwitches.MoveAsync(owner, id, request.RequestId, "stopping", progress, ct);
                 }
+                if (request.Repositories is not null && !progress.RepositoryStopVerified)
+                {
+                    await RequireUnchangedProviderRepositoriesAsync(record, await RequireSourcePodAsync(record, request.SourcePodUid, ct), request.Repositories, ct);
+                    // Persist final code verification before deleting its only local checkout. A retry
+                    // after deletion uses this acknowledgement, never an inferred successful fetch.
+                    progress = progress with { RepositoryStopVerified = true };
+                    await _providerSwitches.MoveAsync(owner, id, request.RequestId, "stopping", progress, ct);
+                }
                 await _browsers.StopAsync(id, ct);
                 if (_containerCleanup is not null) await _containerCleanup.CleanupSessionAsync(id, ct);
                 var source = await TryReadPodAsync("session-" + id, ct);
@@ -280,13 +300,13 @@ public sealed partial class KubernetesSessionService
                         body: new V1DeleteOptions { Preconditions = new V1Preconditions { Uid = request.SourcePodUid },
                             GracePeriodSeconds = _opts.PauseGracePeriodSeconds }, cancellationToken: ct);
                 }
-                await WaitForWorkspaceConsumersAsync(workspace.ClaimName, ct);
+                await WaitForProviderWorkspaceAsync(record, request, workspace, ct);
                 progress = progress with { Phase = "source-stopped" };
                 await _providerSwitches.MoveAsync(owner, id, request.RequestId, "stopping", progress, ct);
             }
             if (progress.Phase == "source-stopped")
             {
-                await WaitForWorkspaceConsumersAsync(workspace.ClaimName, ct);
+                await WaitForProviderWorkspaceAsync(record, request, workspace, ct);
                 await PreflightProviderTargetAsync(record, request.Target, ct);
                 await TargetCapacityAsync(owner, request.Target, request.Handover, ct);
                 await _providerSwitches.AdmitTargetAsync(owner, id, request.RequestId, ct);
@@ -383,6 +403,19 @@ public sealed partial class KubernetesSessionService
         if (_containerCleanup is AgentHub.Api.Containers.SessionContainerService { Enabled: true } helpers
             && (await helpers.ListAsync(record, ct)).Count > 0)
             throw new ProviderReplacementRefusedException("Stop this session's helper containers before switching providers.");
+    }
+
+    private async Task WaitForProviderWorkspaceAsync(SessionRecord record, ProviderSwitchRequest request, SessionWorkspace? workspace, CancellationToken ct)
+    {
+        if (workspace is not null) { await WaitForWorkspaceConsumersAsync(workspace.ClaimName, ct); return; }
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(TimeSpan.FromMinutes(2));
+        while (await TryReadPodAsync("session-" + record.Id, deadline.Token) is { } pod)
+        {
+            if (pod.Metadata.Uid != request.SourcePodUid)
+                throw new ProviderReplacementRefusedException("The source pod identity changed; replacement is held.");
+            await Task.Delay(500, deadline.Token);
+        }
     }
 
     private async Task WaitForWorkspaceConsumersAsync(string claim, CancellationToken ct)

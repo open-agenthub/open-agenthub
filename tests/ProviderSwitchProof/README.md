@@ -78,3 +78,9 @@ WebSocket using `kubectl exec`. It exercises the common server's actual shell tr
 without making this proof depend on the separate legacy backend shell proxy. All switching
 requests and the main agent terminal still use the real backend. This does not verify the
 legacy shell proxy's reconnect behavior.
+
+`node tests/ProviderSwitchProof/delete-proof.mjs` runs a real HTTP server that drops its
+first DELETE reply, both after and before applying deletion. The cleanup helper uses fresh
+connections and an owner GET to reconcile absence or retry the same existing proof resource.
+This keeps a lost cleanup response after backend crash injection from being mistaken for
+failed native recovery; it never retries native input or changes production endpoints.

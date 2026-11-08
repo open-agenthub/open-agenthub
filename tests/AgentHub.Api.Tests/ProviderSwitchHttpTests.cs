@@ -23,7 +23,7 @@ namespace AgentHub.Api.Tests;
 public class ProviderSwitchHttpTests
 {
     [PostgreSqlFact]
-    public async Task ExistingEmptyDirHasExplicitReasonAndOtherUsersCannotReviewOrStart()
+    public async Task DisabledEmptyDirAdmissionHasExplicitReasonAndOtherUsersCannotReviewOrStart()
     {
         await using var database = await PostgresSharingDatabase.CreateAsync(pooling: false);
         await database.Sessions.UpsertAsync(new() { Id = "s", Owner = "alice", Agent = AgentKind.Claude,
@@ -47,8 +47,8 @@ public class ProviderSwitchHttpTests
             http.DefaultRequestHeaders.Add("X-Proof-Owner", "alice");
             var status = await http.GetFromJsonAsync<ProviderSwitchAvailability>("/api/sessions/s/provider-switch");
             Assert.False(status!.Available);
-            Assert.Contains("emptyDir", status.Reason);
-            Assert.Contains("Migration is not supported", status.Reason);
+            Assert.Contains("administrator has disabled admission", status.Reason);
+            Assert.True(status.RepositoryBacked);
             var selection = new ProviderSwitchSelection(Guid.NewGuid(), new(AgentKind.Codex, AgentAuthMode.Subscription, null, null, null),
                 new(AgentKind.Codex, "keep restrictions", "continue"));
             Assert.Equal(HttpStatusCode.Conflict, (await http.PostAsJsonAsync("/api/sessions/s/provider-switch/preview", selection)).StatusCode);

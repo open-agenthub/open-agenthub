@@ -1662,6 +1662,8 @@ public sealed partial class KubernetesSessionService : ISessionService, IExecuti
 
     private async Task<SessionInfo> PauseAndResumeRuntimeCoreAsync(string owner, string id, CancellationToken ct)
     {
+        var before = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
+        await RequireExecutionRepositoryCheckpointAsync(before, ct);
         await PauseSessionCoreAsync(owner, id, ct);
         // The old runtime uploads on termination; starting sooner can restore stale state.
         await WaitForPodGoneCoreAsync(id, ct);
@@ -1693,6 +1695,7 @@ public sealed partial class KubernetesSessionService : ISessionService, IExecuti
         if (rec.ExecutionGeneration > 0 && (!_artifacts.IsConfigured ||
             await _artifacts.HeadAsync(AgentSessionResourceOrchestrator.NativeStateKey(Sanitize(owner), rec), ct) is null))
             throw new InvalidOperationException("The current generation's saved conversation archive is unavailable. Restore it before resuming; the workspace is retained.");
+        await RequireExecutionRepositoryCheckpointAsync(rec, ct);
         await EnsureAgentAllowedAsync(rec.Agent, ct);
         await EnforceUsageLimitAsync(owner, rec.Agent, rec.AuthMode, rec.Mode, ct);
 
@@ -2360,6 +2363,14 @@ public sealed partial class KubernetesSessionService : ISessionService, IExecuti
         context = context with { HasGitCredentials = preparation.HasGitCredentials,
             HasSessionSecrets = true, SecretEnvNames = envNames };
         context = context with { Workspace = _workspaceVolumes is null ? null : await _workspaceVolumes.EnsureAsync(rec, ct) };
+        if (!rec.WorkspacePersistent && rec.ExecutionGeneration > 0)
+        {
+            var checkpoint = replacement?.Repositories ?? (_providerSwitches is null ? null
+                : await _providerSwitches.RepositoryCheckpointAsync(owner, rec.Id, rec.ExecutionGeneration, ct));
+            if (checkpoint is null) throw new ProviderReplacementRefusedException("The execution's repository checkpoint is missing; code restoration is held.");
+            checkpoint.Validate();
+            context = context with { RepositoryCheckpoint = checkpoint };
+        }
         var podSpec = AgentPodSpecFactory.Build(rec, req, context);
 
         if (rec.Mode == SessionMode.Scheduled)
@@ -3066,6 +3077,7 @@ public sealed partial class KubernetesSessionService : ISessionService, IExecuti
 public sealed class AgentHubOptions
 {
     public bool WorkspaceVolumePersistent { get; set; }
+    public bool RepositoryProviderSwitchEnabled { get; set; }
     public string WorkspaceVolumeSize { get; set; } = "10Gi";
     public string? WorkspaceVolumeStorageClass { get; set; }
 
