@@ -11,20 +11,60 @@ import sys
 import urllib.request
 import urllib.parse
 
-COMPONENTS = ('agenthub-backend', 'agenthub-frontend', 'postgres', 'minio')
+COMPONENTS = ('agenthub-backend', 'agenthub-frontend', 'postgres', 'garage',
+              'agenthub-artifact-renderer', 'agenthub-signal-cli')
 PHASES = ('Pending', 'Running', 'Succeeded', 'Failed', 'Unknown')
 REASONS = ('Scheduled', 'Pulled', 'Pulling', 'Created', 'Started', 'Killing',
            'BackOff', 'Failed', 'FailedScheduling', 'Unhealthy', 'FailedMount',
            'FailedAttachVolume', 'Evicted', 'OOMKilled', 'Completed',
            'CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull', 'ContainerCreating')
 # Only types with no customer text are copied from Helm values. Unknown keys are omitted.
-BOOL_VALUES = ('ingress.enabled', 'postgres.enabled', 'minio.enabled', 'oidc.requireHttpsMetadata',
+BOOL_VALUES = ('ingress.enabled', 'postgres.enabled', 'objectStorage.enabled', 'oidc.requireHttpsMetadata',
                'agent.workspaceVolume.persistent', 'agent.allowCustomImage',
                'agent.allowRunAsRoot', 'mcp.enabled', 'spawnMcpEnabled',
                'networkPolicy.enabled', 'sharing.userSuggestionsEnabled')
 INT_VALUES = ('backend.replicas', 'frontend.replicas', 'backend.database.maxPoolSize',
               'backend.database.lockPoolSize', 'maxRunningSessionsPerOwner')
-SCHEMA_NAMES = frozenset(('AllowedAgentsStore', 'ApiTokenStore', 'ChatBindingStore', 'ChatLinkCodeStore', 'EphemeralApiMcpStore', 'LibraryShareStore', 'LicenseStore', 'McpClientStore', 'McpServerStore', 'McpSigningKeyStore', 'PermissionStore', 'PortGrantStore', 'PostgresBrowserLeaseStore', 'PostgresExecutionUsageSnapshots', 'PostgresKeyRepository', 'PostgresModelCatalogStore', 'PostgresProjectStore', 'PostgresProviderSwitchStore', 'PostgresSecretRequestStore', 'PostgresSessionExecutionStore', 'PostgresSessionFileRegistry', 'PostgresSessionMessageStore', 'PostgresSessionOrderStore', 'PostgresSessionStore', 'PostgresSessionTransferTicketStore', 'PostgresSessionWorkspaceStore', 'PostgresUsageStore', 'PostgresWebhookTriggerStore', 'SessionShareStore', 'SingleUserOwnerStore', 'SkillEmbeddingStore', 'SkillStore', 'SlackThreadStore', 'UsageLimitStore', 'UserDirectory', 'UserGroupStore', 'UserRoleStore'))
+# Mirrors SchemaScript.DiagnosticNames; schema-names.py prevents drift.
+SCHEMA_NAMES = frozenset((
+    'AllowedAgentsStore',
+    'ApiTokenStore',
+    'ChatBindingStore',
+    'ChatLinkCodeStore',
+    'EphemeralApiMcpStore',
+    'LibraryShareStore',
+    'LicenseStore',
+    'McpClientStore',
+    'McpServerStore',
+    'McpSigningKeyStore',
+    'PermissionStore',
+    'PortGrantStore',
+    'PostgresBrowserLeaseStore',
+    'PostgresExecutionUsageSnapshots',
+    'PostgresKeyRepository',
+    'PostgresModelCatalogStore',
+    'PostgresProjectStore',
+    'PostgresProviderSwitchStore',
+    'PostgresSecretRequestStore',
+    'PostgresSessionExecutionStore',
+    'PostgresSessionFileRegistry',
+    'PostgresSessionMessageStore',
+    'PostgresSessionOrderStore',
+    'PostgresSessionStore',
+    'PostgresSessionTransferTicketStore',
+    'PostgresSessionWorkspaceStore',
+    'PostgresUsageStore',
+    'PostgresWebhookTriggerStore',
+    'SessionShareStore',
+    'SingleUserOwnerStore',
+    'SkillEmbeddingStore',
+    'SkillStore',
+    'SlackThreadStore',
+    'UsageLimitStore',
+    'UserDirectory',
+    'UserGroupStore',
+    'UserRoleStore',
+))
 VERSION = re.compile(r'(?:v?\d+\.\d+\.\d+(?:-[0-9]+)?|[a-f0-9]{7,64})\Z')
 
 
@@ -70,7 +110,7 @@ def pod_projection(raw):
     for item in raw.get('items', []):
         app = at(item, 'metadata.labels.app')
         if app not in COMPONENTS:
-            continue
+            app = 'other'
         status = item.get('status', {})
         phase = status.get('phase')
         phase = phase if phase in PHASES else 'Unknown'

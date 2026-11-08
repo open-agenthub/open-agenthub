@@ -17,10 +17,13 @@ class ProjectionProof(unittest.TestCase):
         canary = 'private-prompt-with-short-secret'
         self.assertEqual(collector.values_projection({'backend': {'replicas': canary}, 'newField': canary}), {})
         self.assertEqual(collector.values_projection({'backend': {'replicas': 2}, 'newField': canary}), {'backend.replicas': 2})
-        self.assertEqual(collector.logs_projection([canary, '    ' + canary, 'token=' + canary,
+        self.assertEqual(collector.logs_projection(['s7', canary, '    ' + canary, 'token=' + canary,
                          'Application started. Press Ctrl+C to shut down. ' + canary]), [])
         self.assertEqual(collector.logs_projection(list(collector.LOG_LINES)), list(collector.LOG_LINES))
         self.assertEqual(collector.events_projection({'items': [{'reason': canary, 'message': canary}]}, ''), {})
+        pods = collector.pod_projection({'items': [{'metadata': {'labels': {'app': canary}}, 'status': {'phase': 'Running'}}]})
+        self.assertEqual(pods[0]['component'], 'other')
+        self.assertNotIn(canary, json.dumps(pods))
         self.assertEqual(collector.image_tag('https://user:password@example.com/runtime:arbitrary-secret'), 'omitted')
 
     def test_canary_checker_rejects_a_new_leak(self):

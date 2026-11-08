@@ -60,7 +60,12 @@ function collect(label, logs) {
   if (logs) assert(bundle.logsWarning.includes('DPA'));
   return bundle;
 }
+const logName = canary('support-log');
 try {
+  // Startup logs include the configured API-key owner. A synthetic token-shaped
+  // name exercises real log exclusion without weakening request-log protections.
+  kube('set', 'env', 'deployment/agenthub-backend', 'Auth__ApiKeyOwner=' + logName);
+  kube('rollout', 'status', 'deployment/agenthub-backend', '--timeout=180s');
   await connect();
   await api('admin/diagnostics', 'GET', undefined, 401, '');
   const license = canary('invalid-test-license');
@@ -82,16 +87,7 @@ try {
   for (const s of allSecrets.items) for (const v of Object.values(s.data || {})) canaries.push(Buffer.from(v, 'base64').toString());
   const unknown = canary('unknown-schema-row');
   sql(`INSERT INTO schema_scripts(name, sha256) VALUES ('${unknown}', 'not-a-real-script');`);
-  const logSecret = canary('backend-log-secret');
-  // The hardened container cannot reopen PID 1 stdout. Real request logging supplies
-  // sensitive input through the normal server path instead of bypassing the runtime.
-  kube('set', 'env', 'deployment/agenthub-backend',
-    'Logging__LogLevel__Microsoft.AspNetCore.Hosting.Diagnostics=Information');
-  kube('rollout', 'status', 'deployment/agenthub-backend', '--timeout=180s');
-  await connect();
-  await (await fetch(base + '/support-proof/' + logSecret + '?prompt=' + prompt + '&secret=' + secretValue,
-    { signal: AbortSignal.timeout(15000) })).text();
-  await until(() => kube('logs', 'deployment/agenthub-backend', '-c', 'backend', '--all-pods=true', '--tail=1000').includes(logSecret));
+  await until(() => kube('logs', 'deployment/agenthub-backend', '-c', 'backend', '--all-pods=true', '--tail=1000').includes(logName));
   const normal = collect('api-default', false);
   assert.equal(normal.application.license.present, true);
   assert.equal(normal.application.license.valid, false);
