@@ -19,3 +19,15 @@ for(const loseAfterDelete of [true,false]){
  }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
 }
 console.log('PASS: real HTTP lost DELETE reply reconciles already-deleted state or retries the same existing resource; fresh connections, no native input replay.');
+
+const sockets = new Set();
+const fresh = http.createServer((request,response)=>{sockets.add(request.socket);response.end('{}');});
+await new Promise(resolve=>fresh.listen(0,'127.0.0.1',resolve));
+try{
+ for(let index=0;index<4;index++){
+  const response=await fetch('http://127.0.0.1:'+fresh.address().port,{method:index===3?'POST':'GET',headers:{Connection:'close'}});
+  await response.arrayBuffer();
+ }
+ assert.equal(sockets.size,4,'owner requests must not reuse a retiring backend connection');
+}finally{fresh.closeAllConnections();await new Promise(resolve=>fresh.close(resolve));}
+console.log('PASS: real fetch uses a new connection for each owner request when Connection: close is set.');

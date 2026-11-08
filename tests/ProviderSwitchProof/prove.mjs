@@ -9,7 +9,9 @@ const ns = 'agenthub-sessions', control = 'agenthub';
 const kubectl = (...args) => execFileSync('kubectl', args, { encoding:'utf8',stdio:['pipe','pipe','pipe'],maxBuffer:8*1024*1024 });
 const json = (...args) => JSON.parse(kubectl(...args,'-o','json'));
 const key = Buffer.from(json('-n',control,'get','secret','agenthub-api-key').data['api-key'],'base64').toString();
-const headers = {Authorization:'Bearer '+key,'Content-Type':'application/json'};
+// Fault injection retires backend sockets long after their pod leaves Service endpoints.
+// Fresh connections prevent later non-idempotent owner requests from reusing those sockets.
+const headers = {Authorization:'Bearer '+key,'Content-Type':'application/json',Connection:'close'};
 const sleep = ms => new Promise(resolve=>setTimeout(resolve,ms));
 const backendUrl=process.env.PROOF_BACKEND_URL||'http://127.0.0.1:18880';
 const repositoryMode = process.env.PROOF_REPOSITORY === '1';
@@ -32,7 +34,7 @@ async function api(route,method='GET',body,expected=200){
    assert.equal(response.status,expected,method+' '+route+': '+text);
    return text?JSON.parse(text):null;
   }catch(error){
-   if(!recovery||!idempotent||!['TypeError','TimeoutError','AbortError'].includes(error.name))throw error;
+   if(!recovery||!idempotent||!['TypeError','TimeoutError','AbortError'].includes(error.name)){error.message=method+' '+route+': '+error.message;throw error;}
    last=error;await sleep(500);
   }
  }
@@ -205,7 +207,7 @@ try{
     const nativeRequests=JSON.parse(exec(`node -e 'fetch(${JSON.stringify(process.env.PROOF_MODEL_URL+'/proof/requests')}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))'`));
     return nativeRequests.some(row=>row.marker==='SWITCH-PROOF-'+generation&&row.agent===target.toLowerCase()&&row.authMode===authMode);
    },'real native inference with selected target credential mode');
-   const late=await fetch(backendUrl+'/internal/sessions/'+id+'/status',{method:'POST',headers:{'Content-Type':'application/json','X-Agent-Token':sourceToken},body:JSON.stringify({status:'Failed'})});assert.equal(late.status,401);
+   const late=await fetch(backendUrl+'/internal/sessions/'+id+'/status',{method:'POST',headers:{'Content-Type':'application/json','X-Agent-Token':sourceToken,Connection:'close'},body:JSON.stringify({status:'Failed'})});assert.equal(late.status,401);
    const page=await until(async()=>{const approvals=await api('sessions/'+id+'/permissions');for(const approval of approvals)await api('sessions/'+id+'/permissions/'+approval.id,'POST',{decision:'deny'});const rows=JSON.parse(exec(`node -e 'fetch(${JSON.stringify(process.env.PROOF_MODEL_URL+'/proof/requests')}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))'`));return rows.some(row=>row.marker==='SWITCH-PROOF-'+generation&&row.agent===target.toLowerCase()&&row.authMode===authMode&&row.containsQueued)&&await api('sessions/'+id+'/conversation?offset=0&max=500');},'model receives queued message after native handover');
    assert.equal(exec('test ! -e /workspace/provider-proof-not-authorized && printf absent'),'absent');
    if(generation===2)await until(()=>{
@@ -215,7 +217,7 @@ try{
    const users=page.entries.filter(entry=>entry.generation===generation&&entry.role==='user');
    assert.equal(users[0].text,review.text);
    assert(page.entries.some(entry=>entry.text.includes('SWITCH-PROOF-0')));
-   const archive=await fetch(backendUrl+'/api/sessions/'+id+'/state',{headers:{Authorization:'Bearer '+key}});assert.equal(archive.status,200);
+   const archive=await fetch(backendUrl+'/api/sessions/'+id+'/state',{headers:{Authorization:'Bearer '+key,Connection:'close'}});assert.equal(archive.status,200);
    const archiveBytes=Buffer.from(await archive.arrayBuffer());
    const listing=execFileSync('tar',['tzf','-'],{input:archiveBytes,encoding:'utf8',maxBuffer:8*1024*1024});
    assert(listing.includes(native));if(repositoryMode){
