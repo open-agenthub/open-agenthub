@@ -60,10 +60,25 @@ try {
   await git(repo, 'checkout', 'work/proof');
   requireAuth = true;
   assert.equal((await check()).error, 'repository_check_failed');
+  const privateHome = path.join(root, 'source-home'); await fs.mkdir(privateHome);
+  await fs.writeFile(path.join(privateHome, '.netrc'), 'machine 127.0.0.1 login proof password synthetic-fetch\n', { mode: 0o600 });
+  const oldHome = process.env.HOME;
+  try { process.env.HOME = privateHome; assert.equal((await check()).error, 'repository_check_failed'); }
+  finally { if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome; }
+  assert.equal((await inspect(workspace, [{ destination: 'repo', url: 'ssh://git@example.com/repo' }])).repositories[0].error, 'repository_ssh_unsupported');
   const credentials = url.replace('http://', 'http://proof:synthetic-fetch@') + '\n';
   const authenticated = await inspect(workspace, configured, credentials);
   assert.equal(authenticated.repositories[0].error, null);
+  const oddScratch = path.join(root, "scratch space'quote"); await fs.mkdir(oddScratch);
+  const oldTmp = process.env.TMPDIR;
+  try { process.env.TMPDIR = oddScratch; assert.equal((await inspect(workspace, configured, credentials)).repositories[0].error, null); }
+  finally { if (oldTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = oldTmp; }
+
   assert(!JSON.stringify(authenticated).includes('synthetic-fetch'));
+  const oldGitDir = process.env.GIT_DIR;
+  try { process.env.GIT_DIR = bare; assert.equal((await inspect(workspace, configured, credentials)).repositories[0].error, null); }
+  finally { if (oldGitDir === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = oldGitDir; }
+
   await git(repo, 'update-index', '--assume-unchanged', 'code.txt');
   result = (await inspect(workspace, configured, credentials)).repositories[0];
   assert.equal(result.error, 'repository_index_flags_unsupported');

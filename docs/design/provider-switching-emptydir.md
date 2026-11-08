@@ -37,6 +37,10 @@ or URLs into shell code. Refuse missing checkouts, corrupt metadata, conflicting
 symlink escapes, linked worktrees whose Git directory is outside the checkout, extra nested
 repositories, submodules and large-file pointer workflows in the first implementation.
 These layouts need separate restore proofs rather than a misleading clean-tree result.
+The first repository-backed path accepts HTTP(S) remotes only. SSH remotes are not supported yet (follow-up #556). SSH needs separately projected
+key/host verification and a dedicated proof; borrowing the source home or agent socket would
+not establish target access. Fetch verification uses a private HOME and only the freshly
+resolved session Git store, excluding source .netrc files and askpass helpers.
 
 For each repository show its configured identity, local branch, HEAD, remote branch,
 uncommitted tracked change count, untracked count and unpushed commit count when known.

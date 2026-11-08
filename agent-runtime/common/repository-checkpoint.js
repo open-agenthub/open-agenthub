@@ -7,15 +7,27 @@ const { execFile, spawn } = require('node:child_process');
 const LIMITS = Object.freeze({ repositories: 32, manifestBytes: 65536, pathBytes: 1024,
   entries: 10000, names: 200, namesBytes: 16384, outputBytes: 1024 * 1024, networkMs: 60000 });
 
+// Git parses helper configuration as a command, even when execFile itself uses argument arrays.
+function shellWord(value) { return "'" + value.split("'").join("'\\''") + "'"; }
+function gitEnvironment(credentialFile = null) {
+  const env = { ...process.env };
+  // Git's inherited directory/config/trace variables can redirect an otherwise explicit cwd
+  // or borrow source-only auth. A fresh clone init does not inherit these source overrides.
+  for (const name of Object.keys(env)) if (name.startsWith('GIT_')) delete env[name];
+  Object.assign(env, { GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_NO_REPLACE_OBJECTS: '1',
+    GIT_CONFIG_COUNT: '0', GIT_CONFIG_GLOBAL: '/dev/null', GIT_EXTERNAL_DIFF: '', GIT_PAGER: 'cat' });
+  if (credentialFile) Object.assign(env, { HOME: path.dirname(credentialFile), GIT_ASKPASS: '/bin/false',
+    SSH_ASKPASS: '/bin/false', SSH_AUTH_SOCK: '', GIT_SSL_NO_VERIFY: '0' });
+  return env;
+}
 function git(cwd, args, credentialFile = null) {
   return new Promise((resolve, reject) => execFile('git', ['--no-optional-locks',
     '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
     '-c', 'protocol.file.allow=never', '-c', 'protocol.ext.allow=never',
-    '-c', 'credential.helper=',
-    ...(credentialFile ? ['-c', `credential.helper=store --file=${credentialFile}`] : []), ...args], {
+    '-c', 'credential.helper=', '-c', 'credential.interactive=false',
+    ...(credentialFile ? ['-c', `credential.helper=store --file=${shellWord(credentialFile)}`] : []), ...args], {
     cwd, timeout: LIMITS.networkMs, maxBuffer: LIMITS.outputBytes, encoding: 'utf8',
-    env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1',
-      GIT_CONFIG_COUNT: '0', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_PARAMETERS: '', GIT_EXTERNAL_DIFF: '', GIT_PAGER: 'cat' }
+    env: gitEnvironment(credentialFile)
   }, (error, stdout) => error ? reject(new Error('repository_check_failed')) : resolve(stdout)));
 }
 function names(raw) {
@@ -43,9 +55,11 @@ function relative(value) {
 function remote(value) {
   // Reuse configured destinations only; local transports can read arbitrary pod files.
   if (typeof value !== 'string' || /[\x00-\x20\x7f]/.test(value)) throw new Error('repository_remote_invalid');
+  if (/^(?:ssh|git\+ssh):/i.test(value) || (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value) && /^[^/\s:]+:.+/.test(value)))
+    throw new Error('repository_ssh_unsupported');
   let url; try { url = new URL(value); } catch { throw new Error('repository_remote_invalid'); }
-  if (!['https:', 'http:', 'ssh:'].includes(url.protocol) || url.password || url.search || url.hash
-      || (url.protocol !== 'ssh:' && url.username)) throw new Error('repository_remote_invalid');
+  if (!['https:', 'http:'].includes(url.protocol)) throw new Error('repository_transport_unsupported');
+  if (url.password || url.username || url.search || url.hash) throw new Error('repository_remote_invalid');
   return value;
 }
 
@@ -53,8 +67,7 @@ async function ignoredFiles(directory) {
   return new Promise((resolve, reject) => {
     const child = spawn('git', ['--no-optional-locks', '-c', 'core.fsmonitor=false',
       'ls-files', '--others', '--ignored', '--exclude-standard', '-z'], {
-      cwd: directory, stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, GIT_CONFIG_COUNT: '0', GIT_CONFIG_NOSYSTEM: '1',
-        GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_PARAMETERS: '' }
+      cwd: directory, stdio: ['ignore', 'pipe', 'ignore'], env: gitEnvironment()
     });
     let pending = '', count = 0, bytes = 0, failed = false;
     const retained = [];

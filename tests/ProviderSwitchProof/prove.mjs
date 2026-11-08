@@ -215,8 +215,13 @@ try{
    assert.equal(users[0].text,review.text);
    assert(page.entries.some(entry=>entry.text.includes('SWITCH-PROOF-0')));
    const archive=await fetch(backendUrl+'/api/sessions/'+id+'/state',{headers:{Authorization:'Bearer '+key}});assert.equal(archive.status,200);
-   const listing=execFileSync('tar',['tzf','-'],{input:Buffer.from(await archive.arrayBuffer()),encoding:'utf8',maxBuffer:8*1024*1024});
-   assert(listing.includes(native));if(repositoryMode)assert(!listing.includes('local-only')&&!listing.includes('.env'));assert(!/(^|\/)\.credentials\.json$|(^|\/)auth\.json$/m.test(listing));
+   const archiveBytes=Buffer.from(await archive.arrayBuffer());
+   const listing=execFileSync('tar',['tzf','-'],{input:archiveBytes,encoding:'utf8',maxBuffer:8*1024*1024});
+   assert(listing.includes(native));if(repositoryMode){
+    assert(!listing.includes('local-only')&&!listing.includes('.env'));
+    const contents=execFileSync('tar',['xOzf','-'],{input:archiveBytes,maxBuffer:64*1024*1024});
+    assert(!contents.includes(Buffer.from('ignored-source-only'))&&!contents.includes(Buffer.from('outside-source-only')));
+   }assert(!/(^|\/)\.credentials\.json$|(^|\/)auth\.json$/m.test(listing));
    await sleep(500);
    const gone=watchEvents.findIndex(event=>event.type==='DELETED'&&event.uid===source.metadata.uid);
    const added=watchEvents.findIndex(event=>event.type==='ADDED'&&event.uid===current.metadata.uid);
