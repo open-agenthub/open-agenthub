@@ -98,7 +98,10 @@ async function inspectRepository(root, configured, index, credentialFile) {
     await git(directory, ['check-ref-format', '--branch', result.branch]);
     result.commit = (await git(directory, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim();
     if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(result.commit)) throw new Error('repository_commit_invalid');
-    const tracked = names(await git(directory, ['diff', '--name-only', '-z', '--no-ext-diff', 'HEAD', '--']));
+    // Index and worktree edits can cancel in a diff against HEAD while staged work still exists.
+    const staged = names(await git(directory, ['diff', '--cached', '--name-only', '-z', '--no-ext-diff', 'HEAD', '--']));
+    const unstaged = names(await git(directory, ['diff', '--name-only', '-z', '--no-ext-diff', '--']));
+    const tracked = [...new Set([...staged, ...unstaged])];
     const untracked = names(await git(directory, ['ls-files', '--others', '--exclude-standard', '-z']));
     const ignored = await ignoredFiles(directory);
     result.trackedChanges = tracked.length; result.untracked = untracked.length; result.ignored = ignored;

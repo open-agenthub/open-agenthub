@@ -48,6 +48,10 @@ try {
   await fs.writeFile(path.join(repo, 'code.txt'), 'dirty\n');
   result = await check(); assert.equal(result.error, 'repository_work_not_saved'); assert.equal(result.trackedChanges, 1);
   await git(repo, 'add', 'code.txt'); result = await check(); assert.equal(result.error, 'repository_work_not_saved');
+  await fs.writeFile(path.join(repo, 'code.txt'), 'committed\n');
+  assert.equal(await git(repo, 'diff', 'HEAD', '--name-only'), '');
+  assert.equal((await check()).error, 'repository_work_not_saved');
+  await fs.writeFile(path.join(repo, 'code.txt'), 'dirty\n');
   await git(repo, 'config', 'user.name', 'Proof'); await git(repo, 'config', 'user.email', 'proof@example.com');
   await git(repo, 'commit', '-qm', 'Unpublished proof change');
   result = await check(); assert.equal(result.error, 'repository_commit_not_pushed');

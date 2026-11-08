@@ -126,7 +126,7 @@ async function toggle() {
 watch(target, () => { credential.value = '' })
 watch([auth, credential, endpoint, target], () => { model.value = ''; void loadCatalog() })
 watch(() => JSON.stringify(selection()), () => { review.value = null })
-watch(() => props.session.executionGeneration, () => { review.value = null; requestId.value = newRequestId(); void load() })
+watch(() => props.session.executionGeneration, () => { review.value = null; repositories.value = null; acknowledgeOmissions.value = false; requestId.value = newRequestId(); void load() })
 onMounted(() => { void load(); timer = setInterval(() => { if (open.value || active.value) void load() }, 2000) })
 onBeforeUnmount(() => { disposed = true; catalogGeneration++; clearInterval(timer) })
 </script>

@@ -230,7 +230,9 @@ try{
     await api('sessions/'+id+'/resume','POST');
     const resumed=await until(()=>{const value=pod();return value.status.phase==='Running'&&value.status.containerStatuses?.some(item=>item.name==='agent'&&item.ready)&&value;},'completed native pod resume');
     assert.notEqual(resumed.metadata.uid,current.metadata.uid);
-    assert.equal(json('-n',ns,'get','pvc',claimName).metadata.uid,claimUid);assert.equal(fingerprint(),baseline);
+    if(claimName)assert.equal(json('-n',ns,'get','pvc',claimName).metadata.uid,claimUid);
+    else assert(pod().spec.volumes.find(volume=>volume.name==='workspace').emptyDir);
+    assert.equal(fingerprint(),baseline);
     const restoredEnv=resumed.spec.containers.find(item=>item.name==='agent').env;
     assert.equal(restoredEnv.find(item=>item.name==='AGENTHUB_REQUIRE_NATIVE_RESUME').value,'1');
     assert(!restoredEnv.find(item=>item.name==='AGENTHUB_PROMPT').valueFrom);
@@ -246,7 +248,7 @@ try{
     const continued=await until(async()=>{const value=await api('sessions/'+id+'/conversation?offset=0&max=500');return value.entries.some(entry=>entry.generation===generation&&entry.role==='user'&&entry.text.includes(followup))&&value;},'continued owner turn persists in same native generation');
     assert.equal(continued.entries.filter(entry=>entry.generation===generation&&entry.role==='user'&&entry.text===review.text).length,1);
     assert.equal((await api('sessions/'+id)).executionGeneration,generation);
-    console.log(authMode+' generation '+generation+': real native archive resume, same native identity/PVC/history, one handover and new owner turn passed.');
+    console.log(authMode+' generation '+generation+': real native archive resume, same native identity/code/history, one handover and new owner turn passed.');
     if(process.env.PROOF_RECOVERY_SCOPE==='runtime'){
      await until(async()=>{const value=await api('sessions/'+id+'/conversation?offset=0&max=500');const at=value.entries.findIndex(entry=>entry.generation===generation&&entry.role==='user'&&entry.text.includes(followup));return at>=0&&value.entries.slice(at+1).some(entry=>entry.generation===generation&&entry.role==='assistant');},'owner turn finishes before native death');
      assert.equal(resumed.spec.restartPolicy,'Never');terminal.close();terminal=null;
@@ -265,7 +267,9 @@ try{
      assert(held.status.containerStatuses.find(item=>item.name==='agent').state.terminated,'Never policy prevents automatic same-pod replay');
      await api('sessions/'+id+'/resume','POST');
      const recovered=await until(()=>{const value=pod();return value.metadata.uid!==held.metadata.uid&&value.status.containerStatuses?.some(item=>item.name==='agent'&&item.ready)&&value;},'owner explicitly resumes failed native generation');
-     assert.equal(json('-n',ns,'get','pvc',claimName).metadata.uid,claimUid);assert.equal(fingerprint(),baseline);
+     if(claimName)assert.equal(json('-n',ns,'get','pvc',claimName).metadata.uid,claimUid);
+    else assert(pod().spec.volumes.find(volume=>volume.name==='workspace').emptyDir);
+    assert.equal(fingerprint(),baseline);
      const recoveredEnv=recovered.spec.containers.find(item=>item.name==='agent').env;
      assert.equal(recoveredEnv.find(item=>item.name==='AGENTHUB_REQUIRE_NATIVE_RESUME').value,'1');
      assert(!recoveredEnv.find(item=>item.name==='AGENTHUB_PROMPT').valueFrom);
@@ -282,7 +286,7 @@ try{
      assert(history.entries.some(entry=>entry.generation===generation&&entry.role==='user'&&entry.text.includes(followup)));
      await until(()=>{const receipts=JSON.parse(exec(`node -e 'fetch(${JSON.stringify(process.env.PROOF_MODEL_URL+'/proof/requests')}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))'`));return receipts.some(item=>item.agent===target.toLowerCase()&&item.authMode===authMode&&item.marker==='SWITCH-PROOF-'+generation&&item.containsAfterCrash&&item.containsResumed);},'post-crash model receives checkpointed owner context');
      assert.equal((await api('sessions/'+id)).executionGeneration,generation);
-     console.log(authMode+' generation '+generation+': actual container/pod crash via containerd task SIGKILL, Never policy/no same-pod restart, owner resume with same native identity/PVC/history and one handover passed.');
+     console.log(authMode+' generation '+generation+': actual container/pod crash via containerd task SIGKILL, Never policy/no same-pod restart, owner resume with same native identity/code/history and one handover passed.');
     }
 
    }
