@@ -86,6 +86,55 @@ public sealed class AdminController : ControllerBase
             status.ValidUntil is { } stop && stop <= DateTime.UtcNow.AddDays(warningDays)));
     }
 
+    // A separate projection avoids loading user profiles or exporting future overview fields.
+    [HttpGet("diagnostics")]
+    public async Task<IActionResult> Diagnostics(CancellationToken ct)
+    {
+        if (!await IsAdminAsync(ct)) return Forbid();
+        await _license.ReloadAsync(ct);
+        var status = _license.Status;
+        List<object>? scripts = [];
+        string? schemaReason = null;
+        try
+        {
+            await using var connection = await PostgresDataSources.Shared(_cfg).OpenConnectionAsync(ct);
+            await using var command = new Npgsql.NpgsqlCommand(
+                "SELECT name, applied_at FROM schema_scripts ORDER BY name", connection) { CommandTimeout = 5 };
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                var name = reader.GetString(0);
+                // Unknown database rows must not become a channel for customer content.
+                if (SchemaScript.DiagnosticNames.Contains(name))
+                    scripts.Add(new { name, appliedAt = reader.GetDateTime(1) });
+            }
+        }
+        catch (Npgsql.NpgsqlException)
+        {
+            // Missing tracking tables and query failures must not prevent support collection;
+            // exception messages can contain SQL or connection details and never leave here.
+            scripts = null;
+            schemaReason = "unavailable";
+        }
+        return Ok(new
+        {
+            schemaScripts = scripts, schemaReason,
+            license = new
+            {
+                edition = _license.Enabled ? "enterprise" : "community",
+                valid = status.Valid, present = status.Present,
+                expiresAt = status.ValidUntil, seats = status.Seats,
+                usedSeats = await _dir.CountLicensedAsync(ct)
+            },
+            oidc = new
+            {
+                authorityPresent = !string.IsNullOrWhiteSpace(_cfg["Oidc:Authority"]),
+                clientIdPresent = !string.IsNullOrWhiteSpace(_cfg["Oidc:ClientId"]),
+                audiencePresent = !string.IsNullOrWhiteSpace(_cfg["Oidc:Audience"])
+            }
+        });
+    }
+
     public sealed record CheckoutReq(string Email, string Org, int Seats, string? ReturnUrl);
 
     /// <summary>

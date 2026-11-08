@@ -27,6 +27,49 @@ namespace AgentHub.Api.Persistence;
 /// </remarks>
 public static class SchemaScript
 {
+    // Keep diagnostic output closed to unknown database names; the source-audit proof
+    // requires every schema caller to be registered here before it can ship.
+    public static readonly IReadOnlySet<string> DiagnosticNames = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "AllowedAgentsStore",
+        "ApiTokenStore",
+        "ChatBindingStore",
+        "ChatLinkCodeStore",
+        "EphemeralApiMcpStore",
+        "LibraryShareStore",
+        "LicenseStore",
+        "McpClientStore",
+        "McpServerStore",
+        "McpSigningKeyStore",
+        "PermissionStore",
+        "PortGrantStore",
+        "PostgresBrowserLeaseStore",
+        "PostgresExecutionUsageSnapshots",
+        "PostgresKeyRepository",
+        "PostgresModelCatalogStore",
+        "PostgresProjectStore",
+        "PostgresProviderSwitchStore",
+        "PostgresSecretRequestStore",
+        "PostgresSessionExecutionStore",
+        "PostgresSessionFileRegistry",
+        "PostgresSessionMessageStore",
+        "PostgresSessionOrderStore",
+        "PostgresSessionStore",
+        "PostgresSessionTransferTicketStore",
+        "PostgresSessionWorkspaceStore",
+        "PostgresUsageStore",
+        "PostgresWebhookTriggerStore",
+        "SessionShareStore",
+        "SingleUserOwnerStore",
+        "SkillEmbeddingStore",
+        "SkillStore",
+        "SlackThreadStore",
+        "UsageLimitStore",
+        "UserDirectory",
+        "UserGroupStore",
+        "UserRoleStore",
+    };
+
     public const string TrackingTable = "schema_scripts";
 
     /// <summary>Set by <see cref="SchemaMigrationLock"/> for the migrations it runs, which have no logger of their own.</summary>
