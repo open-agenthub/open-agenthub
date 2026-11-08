@@ -16,6 +16,7 @@ public static class LoopbackHttpListener
 {
     private const int Attempts = 20;
 
+    /// <summary>Starts a listener whose prefixes all share one free port.</summary>
     /// <param name="prefixes">The listener prefixes for a candidate port; every one must bind.</param>
     public static HttpListener Start(Func<int, IEnumerable<string>> prefixes, out int port)
     {
