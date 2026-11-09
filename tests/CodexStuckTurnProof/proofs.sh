@@ -8,4 +8,5 @@ run reason WS=1 NOTICE_MIN=1 SCENARIO=active ACTIVE_PROMPT='Please think STREAMR
 run auto MODE=autonomous PROMPT='Please do the STALLTOOL task' WS=1 KEEPALIVE_MS=5000 STALL_CMD='sleep infinity' NOTICE_MIN=1 INTERRUPT_MIN=2 WATCH_MS=200000
 run interactive-no-auto WS=1 KEEPALIVE_MS=5000 STALL_CMD='sleep infinity' NOTICE_MIN=1 INTERRUPT_MIN=1 SCENARIO=stalltool WATCH_MS=180000
 run reconnecting NOTICE_MIN=1 SCENARIO=down WATCH_MS=120000
+run long-stall WS=1 KEEPALIVE_MS=5000 STALL_CMD='sleep infinity' NOTICE_MIN=1 SCENARIO=stalltool WATCH_MS=600000
 echo ALL DONE
