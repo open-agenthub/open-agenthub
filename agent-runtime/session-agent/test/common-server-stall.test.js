@@ -125,8 +125,11 @@ test('the Codex view keeps the status header and drops only the spinner and the 
   assert.equal(view(['◦ Working (16s • esc to interrupt) · 1 background terminal running']),
     view(['• Working (17h 16m 37s • esc to interrupt) · 1 background terminal running']));
   assert.notEqual(view(['• Working (16s • esc to interrupt)']), view(['• Planning the fix (16s • esc to interrupt)']));
-  assert.notEqual(view(['• Working (16s • esc to interrupt) · 1 background terminal running']),
-    view(['• Working (16s • esc to interrupt) · 2 background terminals running']));
+  // Cut to the terminal's width, the row ends somewhere else each time the time grows a digit.
+  assert.equal(view(['◦ Working (59s • esc to interrupt) · 1 background terminal running · /ps to vie…']),
+    view(['• Working (1m 00s • esc to interrupt) · 1 background terminal running · /ps to vi…']));
+  assert.equal(view(['◦ Working (9m 59s • esc to inter…']), view(['• Working (10m 00s • esc to inte…']));
+  assert.equal(view(['• Explored (2 files)']), ' Explored (2 files)');
   assert.equal(codexDriver.progressScreen(['◦ Reconnecting... waiting for network (29s • esc to interrupt)']).reconnecting, true);
   assert.equal(codexDriver.progressScreen(['• Working (29s • esc to interrupt)']).reconnecting, false);
 });
