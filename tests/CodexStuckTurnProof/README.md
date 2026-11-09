@@ -27,9 +27,16 @@ private `/tmp`. Run one scenario at a time, because all runs share the fixture H
 | `bg` | starts `CMD` (default `sleep infinity`) through unified exec with a 1 s yield, then answers; then sends a normal, composer, priority and interrupt message |
 | `idlebg` | starts `CMD` in the background, then sends a normal message to the idle agent |
 | `cmds` | one prompt per `CMDS` entry (`;;`-separated): `FG:<cmd>`, `BG:<cmd>`, `BGT:<cmd>` (tty), `YIELD:<ms>:<cmd>`, `POLL:<ms>:<cmd>` (exec, then `write_stdin` with that yield), `MCP:<namespace>/<tool> {json args}` |
-| `stall`, `stalltool` | the stream stops sending after `response.created` (`WS=1` for the WebSocket transport, `PING_MS` for WebSocket pings, `IDLE_MS` for `stream_idle_timeout_ms`) |
+| `stall` | the stream stops sending after `response.created` |
+| `stalltool` | the model writes a sentence and starts `STALL_CMD` (default `sleep 1`) through exec in the same response. The request that carries the tool output then stalls. `INTERRUPT_PUSH=1` interrupts with a priority push instead of the Workspace interrupt |
 | `down` | the model endpoint refuses connections; `RESTORE=1` brings it back |
 | `compact` | `/compact` |
+
+Stall options: `WS=1` uses the Responses WebSocket transport. `KEEPALIVE_MS` sends a `response.in_progress` event (or `KEEPALIVE_TYPE`) at that interval while the stream is stalled. `PING_MS` sends WebSocket pings. `IDLE_MS` sets `stream_idle_timeout_ms`; Codex's default is used without it. The owner's screen in #562 comes from:
+
+```bash
+WS=1 KEEPALIVE_MS=5000 STALL_CMD='sleep infinity' SCENARIO=stalltool WATCH_MS=120000 node rig.mjs
+```
 
 For an MCP server, pass `EXTRA_TOML` with literal `\n` between lines. For example, the
 stand-in server whose `wait` tool never answers:

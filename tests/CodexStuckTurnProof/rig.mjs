@@ -36,6 +36,7 @@ const modelRequests = [];
 const hubEvents = [];
 const openStreams = new Set();
 const peerPolls = [];
+let lastPrompt = '';
 
 const sse = events => events.map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
 function lastItem(body) {
@@ -56,8 +57,12 @@ const callItem = (n, name, args) => ({ type: 'response.output_item.done', item: 
 
 function model(parsed, sink) {
   const n = modelRequests.length + 1;
-  const user = lastUserText(parsed);
+  // Over the WebSocket transport a follow-up carries only the new items (previous_response_id),
+  // so a tool output arrives without the prompt it belongs to.
+  let user = lastUserText(parsed);
   const last = lastItem(parsed);
+  if (!user && last.type === 'function_call_output') user = lastPrompt;
+  else if (user && !/^Generate a concise, single-line task title/.test(user)) lastPrompt = user;
   const isTitle = /^Generate a concise, single-line task title/.test(user);
   modelRequests.push({ at: Date.now(), user, lastType: last.type, isTitle, body: parsed });
   if (n === 1) fs.writeFileSync(OUT + '/tools-raw.json', JSON.stringify(parsed.tools, null, 1));
@@ -79,16 +84,22 @@ function model(parsed, sink) {
     if (outputs.length === 1 && sid) return finish([callItem(n, 'write_stdin', { session_id: Number(sid), chars: '', yield_time_ms: Number(poll[1]) }), completed(n)]);
   }
   if (last.type === 'function_call_output') {
-    if (/STALLTOOL/.test(user)) return stall('stalls after the tool output');
+    if (/STALLTOOL/.test(user)) {
+      if (process.env.KEEPALIVE_MS) { const iv = setInterval(() => { if (!openStreams.has(sink)) return clearInterval(iv); sink.send([{ type: process.env.KEEPALIVE_TYPE || 'response.in_progress', response: { id: 'r' + n } }]); }, Number(process.env.KEEPALIVE_MS)); }
+      return stall('stalls after the tool output' + (process.env.KEEPALIVE_MS ? ' (keep-alive events)' : ''));
+    }
     return finish([textItem(n, 'STARTED ' + ((bg || fg || [])[1] || '') + ' - it keeps running in the background. ACK ' + (user.match(/MSG-\w+/g) || ['none']).join(',')), completed(n)]);
   }
-  if (/STALLTOOL/.test(user)) return finish([callItem(n, 'exec_command', { cmd: 'sleep 1' }), completed(n)]);
+  if (/STALLTOOL/.test(user)) return finish([textItem(n, 'I can set up the first technical run with generated demo audio.'), callItem(n, 'exec_command', { cmd: process.env.STALL_CMD || 'sleep 1', yield_time_ms: 1000 }), completed(n)]);
   if (/STALL/.test(user) && !/AgentHub|MSG-/.test(user)) {
+    if (process.env.KEEPALIVE_MS) { const iv = setInterval(() => { if (!openStreams.has(sink)) return clearInterval(iv); sink.send([{ type: process.env.KEEPALIVE_TYPE || 'response.in_progress', response: { id: 'r' + n } }]); }, Number(process.env.KEEPALIVE_MS)); }
     if (process.env.PING_MS && sink.ping) { const iv = setInterval(() => { if (!openStreams.has(sink)) return clearInterval(iv); sink.ping(); }, Number(process.env.PING_MS)); }
     return stall('stalls (no further events)' + (process.env.PING_MS && sink.ping ? ', pinging every ' + process.env.PING_MS + 'ms' : ''));
   }
   const mcp = user.match(/MCP:(\S+)(?: (\{.*\}))?/);
   if (mcp) { const [ns, name] = mcp[1].split('/'); const c = callItem(n, name, mcp[2] ? JSON.parse(mcp[2]) : {}); c.item.namespace = ns; return finish([c, completed(n)]); }
+  const tfg = user.match(/TEXTFG:(.+)$/m), tbgt = user.match(/TEXTBGT:(.+)$/m);
+  if (tfg || tbgt) { const c = callItem(n, 'exec_command', { cmd: (tfg || tbgt)[1].trim(), ...(tbgt ? { tty: true } : {}) }); return finish([textItem(n, 'I can set up the first run with generated demo audio.'), c, completed(n)]); }
   if (yld) return finish([callItem(n, 'exec_command', { cmd: yld[2].trim(), yield_time_ms: Number(yld[1]) }), completed(n)]);
   if (poll) return finish([callItem(n, 'exec_command', { cmd: poll[2].trim(), yield_time_ms: 1000 }), completed(n)]);
   if (bgt) return finish([callItem(n, 'exec_command', { cmd: bgt[1].trim(), yield_time_ms: 1000, tty: true }), completed(n)]);
@@ -320,6 +331,7 @@ async function main() {
       const before = modelRequests.length;
       const t = Date.now();
       await paste('Run it. ' + c);
+      setTimeout(() => dump('cmd-' + out.length + '-mid'), 5000);
       const need = /POLL:/.test(c) ? 2 : 1;
       
       const ok = await until(() => modelRequests.slice(before).filter(r => r.lastType === 'function_call_output').length >= need, Number(process.env.CMD_WAIT_MS || 60000), 'tool output for ' + c);
@@ -355,10 +367,11 @@ async function main() {
       await push('MSG-P', 'MSG-P: priority during the stall.', { priority: true });
       await sleep(8000);
       report('b/priority', ['MSG-N', 'MSG-Q', 'MSG-P']);
-      ws.send(JSON.stringify({ type: 'interrupt' }));
+      if (process.env.INTERRUPT_PUSH) await push('MSG-X', 'MSG-X: priority with interrupt during the stall.', { priority: true, interrupt: true });
+      else ws.send(JSON.stringify({ type: 'interrupt' }));
       await sleep(8000);
       dump('b4-after-interrupt');
-      report('b/interrupt', ['MSG-N', 'MSG-Q', 'MSG-P']);
+      report('b/interrupt', ['MSG-N', 'MSG-Q', 'MSG-P', 'MSG-X']);
     }
     await sleep(8000);
     dump('b5-end');
