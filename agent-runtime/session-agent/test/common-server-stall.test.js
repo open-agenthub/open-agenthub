@@ -97,6 +97,29 @@ test('an unattended run is interrupted once at the interrupt minutes, and says w
   assert.deepEqual(pty.writes, ['\x03']);
 });
 
+test('the failed run says it was interrupted for want of progress', async () => {
+  const { h, pty, check } = rig({ AGENTHUB_STALLED_TURN_INTERRUPT_MINUTES: '60', TERMINATION_MESSAGE_PATH: '/termination' }, 'autonomous');
+  await check(0);
+  await check(61);
+  assert.deepEqual(pty.writes, ['\x03']);
+  pty.emitExit({ exitCode: 1 });
+  await new Promise(resolve => setTimeout(resolve, 30));
+  const message = h.writes.find(write => write.file === '/termination');
+  assert.match(message.data, /^Turn interrupted after 61 min without progress\. Test exited with code 1/);
+});
+
+test('a run that moves right before the limit is not interrupted, and one that ended gets no key', async () => {
+  const { h, pty, check } = rig({ AGENTHUB_STALLED_TURN_INTERRUPT_MINUTES: '60' }, 'autonomous');
+  await check(0);
+  await check(59);
+  // Its last output arrives in the same check that reaches the limit: that is progress.
+  await check(1.5, { content: '{"type":"turn.completed"}' });
+  assert.deepEqual(pty.writes, []);
+  pty.emitExit({ exitCode: 0 });
+  await check(120);
+  assert.deepEqual(pty.writes, []);
+});
+
 test('0 turns the notice and the interrupt off', async () => {
   const { h, pty, check } = rig({ AGENTHUB_STALLED_TURN_NOTICE_MINUTES: '0', AGENTHUB_STALLED_TURN_INTERRUPT_MINUTES: '0' }, 'autonomous');
   await check(0);

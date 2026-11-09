@@ -221,7 +221,7 @@ const env = {
   CODEX_API_KEY: 'rig-key',
   AGENTHUB_DRIVER: '/opt/session-agent/codex/driver.js', AGENTHUB_MODE: process.env.MODE || 'interactive', AGENTHUB_PROMPT: process.env.PROMPT || '', AGENTHUB_PORT: String(AGENT),
   AGENTHUB_SESSION_ID: 's1', AGENTHUB_CALLBACK_URL: `http://127.0.0.1:${HUB}/internal/sessions/s1`,
-  AGENTHUB_CALLBACK_TOKEN: 'rig-token', AGENTHUB_STALLED_TURN_NOTICE_MINUTES: process.env.NOTICE_MIN ?? '', AGENTHUB_STALLED_TURN_INTERRUPT_MINUTES: process.env.INTERRUPT_MIN ?? '', AGENTHUB_WORKDIR: R + '/work', AGENTHUB_SKILLS_SYNC_SECONDS: '0'
+  AGENTHUB_CALLBACK_TOKEN: 'rig-token', AGENTHUB_STALLED_TURN_NOTICE_MINUTES: process.env.NOTICE_MIN ?? '', AGENTHUB_STALLED_TURN_INTERRUPT_MINUTES: process.env.INTERRUPT_MIN ?? '', AGENTHUB_WORKDIR: R + '/work', TERMINATION_MESSAGE_PATH: '/tmp/termination-log', AGENTHUB_SKILLS_SYNC_SECONDS: '0'
 };
 const proc = spawn(S + '/proot', ['-b', R + '/rt:/opt/session-agent', '-b', R + '/etc-codex:/etc/codex', '-b', R + '/etc-opencode:/etc/opencode', '-b', fs.mkdtempSync(R + '/tmp-run-') + ':/tmp',
   'node', '/opt/session-agent/server.js'], { env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
@@ -267,6 +267,10 @@ async function main() {
   const scenario = process.env.SCENARIO || 'bg';
   if (process.env.MODE === 'autonomous') {
     await sleep(Number(process.env.WATCH_MS || 30000)); dump('auto-1');
+    if (process.env.AUTO_KEY === 'esc') {
+      say('AUTO: Workspace interrupt (driver key, Esc)'); ws.send(JSON.stringify({ type: 'interrupt' })); await sleep(10000); dump('auto-esc');
+      say('AUTO after Esc: session agent exited=' + proc.exitCode + ' stream still open=' + (openStreams.size > 0));
+    }
     say('AUTO: sending Ctrl+C'); sendInput('\x03'); await sleep(8000); dump('auto-2');
     say('AUTO RESULT: exited=' + proc.exitCode); return;
   }

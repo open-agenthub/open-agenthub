@@ -555,6 +555,9 @@ function createCommonServer(options = {}) {
     console.warn(value ? '[agent] State not saved: sign-in data present or privacy scan incomplete.' : '[agent] State saving resumed.');
     for (const socket of activityClients) safeSend(socket, persistenceFrame());
   }
+  // Leads the exit reason, so the failed session says why instead of showing the CLI's last
+  // lines about an interruption nobody in the session asked for.
+  let stallInterruption = null;
   function stallBusy() {
     if (exited || !term || chatMode || restartReason !== null || runtimeDraining) return false;
     // An unattended run is one turn from start to exit; an interactive one is busy between its
@@ -573,6 +576,7 @@ function createCommonServer(options = {}) {
   // session finishes as failed instead of holding its pod and account for hours.
   function interruptStalledTurn(minutes) {
     const text = 'Turn interrupted after ' + minutes + ' min without progress.';
+    stallInterruption = text;
     console.log('[agent] ' + text);
     const line = '\r\n[agent] ' + text + '\r\n';
     remember(line);
@@ -1278,8 +1282,9 @@ function createCommonServer(options = {}) {
         const shown = signInPrivacy.mask(stripAnsi(attemptOutput)).split('\n')
           .filter(line => !line.includes(removed)).join('\n');
         secretMask.refresh();
+        const reason = exitReason(driver.name, exitCode, signal, shown, text => secretMask.mask(text));
         fs.writeFileSync(env.TERMINATION_MESSAGE_PATH || '/dev/termination-log',
-          exitReason(driver.name, exitCode, signal, shown, text => secretMask.mask(text)));
+          stallInterruption ? stallInterruption + ' ' + reason : reason);
       }).catch(() => { /* not in a pod */ }).finally(report);
     });
   }

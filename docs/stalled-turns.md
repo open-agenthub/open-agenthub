@@ -65,7 +65,16 @@ follow at the turn's end.
 
 After `agent.stalledTurnInterruptMinutes` (default 60), an **Autonomous or Scheduled** run gets
 Ctrl+C. The session agent first writes `[agent] Turn interrupted after N min without progress.`
-to the scrollback and the pod log. `codex exec` stops on Ctrl+C, and the session ends as failed.
+to the scrollback and the pod log. `codex exec` stops on Ctrl+C and the session ends as Failed.
+The same sentence leads its termination message, so the session list gives the stall as the
+reason instead of the CLI's last lines.
+
+Why Ctrl+C here, and Esc in the Workspace: these runs are `codex exec`, which has no TUI and
+reads no keys. Measured on 0.167.0, Esc left a stalled exec run going for 10 s and more, while
+Ctrl+C ended it at once. The TUI's own risk, a second Ctrl+C at an idle prompt quitting Codex,
+does not exist without a prompt. The interrupt is also latched: one key per stalled turn, only
+while the process runs. A run whose last output lands in the check that reaches the limit counts
+that output as progress first, and a run that has exited gets no key.
 Nobody watches such a run, and a hung one holds its pod and its account for as long as it
 lasts. **Interactive sessions are never interrupted for the person**: their notice stays, and
 the person decides. 0 turns off either setting. Both are read when a session pod starts.
