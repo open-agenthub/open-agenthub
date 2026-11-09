@@ -68,6 +68,21 @@ test('new content or a hook event is progress; the person typing is not', async 
   assert.equal((await check(10)).stalled, undefined);
 });
 
+test('hours of timer redraws do not read as progress', async () => {
+  const { h, pty, check } = rig();
+  await turn(h, 'prompt');
+  pty.emitData('\x1b[1;1H\x1b[2J  >_ OpenAI Codex (v0.167.0)\r\n\r\n• I can set up the first technical run with generated demo audio.');
+  await check(0);
+  // More redraws than any replay of the scrollback's tail reaches back over (#562: the stall
+  // vanished about three minutes in, when the replayed window lost the full draw).
+  for (let minute = 1; minute <= 21; minute++) {
+    for (let second = 0; second < 60; second++) pty.emitData(`\x1b[3;1H\x1b[2K${second % 2 ? '◦' : '•'} Working (${minute}m ${String(second).padStart(2, '0')}s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close`.repeat(4));
+    const frame = await check(1);
+    if (minute < 20) assert.equal(frame.stalled, undefined, 'minute ' + minute);
+  }
+  assert.deepEqual((await check(0)).stalled, { minutes: 21, reason: 'no_progress' });
+});
+
 test('the reconnect status row is reported as its own reason', async () => {
   const { h, check } = rig();
   await turn(h, 'prompt');

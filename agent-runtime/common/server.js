@@ -558,6 +558,17 @@ function createCommonServer(options = {}) {
   // Leads the exit reason, so the failed session says why instead of showing the CLI's last
   // lines about an interruption nobody in the session asked for.
   let stallInterruption = null;
+  // The agent's screen as a terminal that saw every byte of this attempt. A replay of the
+  // scrollback's tail is not that: Codex redraws its timer every second, and after about three
+  // minutes the replayed window no longer reaches back to a full draw. The fragment it renders
+  // then differs at every check, which read as progress, so a stalled turn was never reported.
+  let stallScreen = null;
+  function stallScreenRows() {
+    const buffer = stallScreen.buffer.active;
+    const rows = [];
+    for (let i = 0; i < stallScreen.rows; i++) rows.push(buffer.getLine(buffer.viewportY + i)?.translateToString(true) ?? '');
+    return rows;
+  }
   function stallBusy() {
     if (exited || !term || chatMode || restartReason !== null || runtimeDraining) return false;
     // An unattended run is one turn from start to exit; an interactive one is busy between its
@@ -1422,6 +1433,9 @@ function createCommonServer(options = {}) {
     });
 
     if (stallWatch) {
+      try { stallScreen?.dispose(); } catch {}
+      const size = lastSize || { cols: 120, rows: 32 };
+      stallScreen = new (headlessTerminal())({ cols: size.cols, rows: size.rows, allowProposedApi: true, scrollback: 0 });
       const ptyWrite = term.write.bind(term);
       term.write = data => { stallWatch.input(); return ptyWrite(data); };
     }
@@ -1429,6 +1443,7 @@ function createCommonServer(options = {}) {
     if (contextClear) contextClear.resume();
     term.onData(data => {
       activityLastOutput = now();
+      stallScreen?.write(data);
       if (nextTurn) nextTurn.agentOutput();
       attemptOutput += data;
       remember(data);
@@ -1542,6 +1557,7 @@ function createCommonServer(options = {}) {
             lastSize = { cols: message.cols, rows: message.rows };
             signInPrivacy.resize(message.cols, message.rows);
             try { term?.resize(message.cols, message.rows); } catch {}
+            try { stallScreen?.resize(message.cols, message.rows); } catch {}
             return;
           }
           if (message.type === 'input' && typeof message.data === 'string' && isTerminalReply(message.data)) {
@@ -1610,6 +1626,7 @@ function createCommonServer(options = {}) {
         lastSize = { cols: message.cols, rows: message.rows };
         signInPrivacy.resize(message.cols, message.rows);
         try { term.resize(message.cols, message.rows); } catch {}
+        try { stallScreen?.resize(message.cols, message.rows); } catch {}
       }
     });
     socket.on('close', () => { clients.delete(socket); removeActivityClient(socket); });
@@ -2811,10 +2828,12 @@ function createCommonServer(options = {}) {
     setIntervalImpl(() => {
       const busy = stallBusy();
       stallWatch.busy(busy);
-      if (!busy || checkingStall) return;
+      if (!busy || checkingStall || !stallScreen) return;
       checkingStall = true;
-      renderScreen(scrollback, lastSize || { cols: 120, rows: 32 }, headlessTerminal())
-        .then(rows => {
+      // Through the write queue, so the rows include everything the PTY has sent so far.
+      new Promise(resolve => stallScreen.write('', resolve))
+        .then(() => {
+          const rows = stallScreenRows();
           const screen = driver.progressScreen(rows);
           stallWatch.observe(screen && { key: screen.key + '\n' + transcriptMark(), reconnecting: screen.reconnecting });
           const minutes = mode === 'interactive' ? null : stallWatch.takeInterrupt();

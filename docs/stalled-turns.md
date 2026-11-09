@@ -55,6 +55,12 @@ and 1 h. The row's header stays: a reasoning summary changes it. A screen change
 same check interval as keys written to the PTY does not count. Those keys are the person or a
 fleet message typing into the queue panel, not the agent working.
 
+The screen is a headless terminal that receives every byte the CLI writes, not a replay of the
+scrollback's last 256 KiB like the other screen checks use. Codex redraws its timer every
+second, and after about three minutes such a replay no longer reaches back to a full draw. The
+fragment it rendered differed at every check, so a stalled turn looked busy and was never
+reported. A real run found this at 3 min 15 s.
+
 After `agent.stalledTurnNoticeMinutes` (default 20) without progress, the activity frame carries
 `stalled: {minutes, reason}`. The reason is `reconnecting` when the status row says `Reconnecting...
 waiting for network`, otherwise `no_progress`. The Workspace replaces "Working…" with "No
