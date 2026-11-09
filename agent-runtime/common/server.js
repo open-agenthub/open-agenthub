@@ -13,6 +13,7 @@ const { AttachmentMaterializer } = require('../files/materialize');
 const credentials = require('./credential-install');
 const { injectTerminalInput, formatFleetMessage, INTERRUPT_PAUSE_MS, ESCAPE } = require('./terminal-inject');
 const { createNextTurnDelivery, renderScreen, isTerminalReply, IDLE_QUIET_MS } = require('./next-turn');
+const { createStallWatch, stallSettings, CHECK_MS: STALL_CHECK_MS } = require('./stall-watch');
 // How long a typed handover may take to appear in the CLI's transcript. Both CLIs write the
 // user turn when it is submitted, before the model answers.
 const HANDOVER_VERIFY_MS = 10_000;
@@ -310,6 +311,12 @@ function createCommonServer(options = {}) {
       log: line => console.log('[agent] ' + line)
     })
     : null;
+  // A turn that stops progressing without ending (#562, docs/stalled-turns.md). Only for a driver
+  // that can tell its animation from its progress on the screen; without hooks an interactive
+  // TUI has no turn to watch.
+  const stallWatch = typeof driver.progressScreen === 'function' && (mode !== 'interactive' || nextTurn)
+    ? createStallWatch({ now, ...stallSettings(env) })
+    : null;
   // Keys a person sends while a message is being typed in: they go in after its Enter instead of
   // landing in the middle of it.
   nextTurn?.suspend(runtimeDraining);
@@ -548,6 +555,45 @@ function createCommonServer(options = {}) {
     console.warn(value ? '[agent] State not saved: sign-in data present or privacy scan incomplete.' : '[agent] State saving resumed.');
     for (const socket of activityClients) safeSend(socket, persistenceFrame());
   }
+  // Leads the exit reason, so the failed session says why instead of showing the CLI's last
+  // lines about an interruption nobody in the session asked for.
+  let stallInterruption = null;
+  // The agent's screen as a terminal that saw every byte of this attempt. A replay of the
+  // scrollback's tail is not that: with a CLI that redraws a timer every second, the replayed
+  // window no longer reaches back to a full draw after a few minutes. The fragment it renders
+  // then differs at every check, which read as progress, so a stalled turn was never reported.
+  let stallScreen = null;
+  function stallScreenRows() {
+    const buffer = stallScreen.buffer.active;
+    const rows = [];
+    for (let i = 0; i < stallScreen.rows; i++) rows.push(buffer.getLine(buffer.viewportY + i)?.translateToString(true) ?? '');
+    return rows;
+  }
+  function stallBusy() {
+    if (exited || !term || chatMode || restartReason !== null || runtimeDraining) return false;
+    // An unattended run is one turn from start to exit; an interactive one is busy between its
+    // prompt and its Stop hook, and not while it waits for a person.
+    if (mode !== 'interactive') return true;
+    return nextTurn?.state === 'busy' && !activityWaitingFor && !activityIdleOverride;
+  }
+  // A CLI that writes each finished item to its transcript shows progress there that the screen
+  // may not (a long command's output scrolls nothing new into view).
+  function transcriptMark() {
+    if (!transcriptFile) return '';
+    try { return String(fs.statSync(transcriptFile).size); } catch { return ''; }
+  }
+  // Only for sessions nobody watches (Autonomous, Scheduled): an interactive session gets the
+  // Workspace notice and its person decides. Ctrl+C ends a non-interactive CLI's run, so the
+  // session finishes as failed instead of holding its pod and account for hours.
+  function interruptStalledTurn(minutes) {
+    const text = 'Turn interrupted after ' + minutes + ' min without progress.';
+    stallInterruption = text;
+    console.log('[agent] ' + text);
+    const line = '\r\n[agent] ' + text + '\r\n';
+    remember(line);
+    broadcast(line);
+    try { term.write('\x03'); } catch {}
+  }
   function activityFrame() {
     let state = 'idle';
     const source = nextTurn ? 'hooks' : 'output';
@@ -567,7 +613,9 @@ function createCommonServer(options = {}) {
     // person types; the Workspace waited for that and showed "Session starting" over a CLI that
     // was already reading keys (#306). See agentReady for when that is.
     const ready = agentReady && Boolean(term) && !exited && restartReason === null && !runtimeDraining;
-    return JSON.stringify({ type: 'agenthub', subtype: 'activity', state, source, ready, ...(reason ? { reason } : {}), ...(questions ? { questions } : {}) });
+    const stalled = stallWatch && stallBusy() ? stallWatch.stalled() : null;
+    return JSON.stringify({ type: 'agenthub', subtype: 'activity', state, source, ready, ...(reason ? { reason } : {}), ...(questions ? { questions } : {}),
+      ...(stalled ? { stalled } : {}) });
   }
   function removeActivityClient(socket) {
     activityClients.delete(socket);
@@ -1245,8 +1293,9 @@ function createCommonServer(options = {}) {
         const shown = signInPrivacy.mask(stripAnsi(attemptOutput)).split('\n')
           .filter(line => !line.includes(removed)).join('\n');
         secretMask.refresh();
+        const reason = exitReason(driver.name, exitCode, signal, shown, text => secretMask.mask(text));
         fs.writeFileSync(env.TERMINATION_MESSAGE_PATH || '/dev/termination-log',
-          exitReason(driver.name, exitCode, signal, shown, text => secretMask.mask(text)));
+          stallInterruption ? stallInterruption + ' ' + reason : reason);
       }).catch(() => { /* not in a pod */ }).finally(report);
     });
   }
@@ -1383,10 +1432,18 @@ function createCommonServer(options = {}) {
       cwd, env: agentEnv
     });
 
+    if (stallWatch) {
+      try { stallScreen?.dispose(); } catch {}
+      const size = lastSize || { cols: 120, rows: 32 };
+      stallScreen = new (headlessTerminal())({ cols: size.cols, rows: size.rows, allowProposedApi: true, scrollback: 0 });
+      const ptyWrite = term.write.bind(term);
+      term.write = data => { stallWatch.input(); return ptyWrite(data); };
+    }
     if (nextTurn) nextTurn.agentStarted();
     if (contextClear) contextClear.resume();
     term.onData(data => {
       activityLastOutput = now();
+      stallScreen?.write(data);
       if (nextTurn) nextTurn.agentOutput();
       attemptOutput += data;
       remember(data);
@@ -1500,6 +1557,7 @@ function createCommonServer(options = {}) {
             lastSize = { cols: message.cols, rows: message.rows };
             signInPrivacy.resize(message.cols, message.rows);
             try { term?.resize(message.cols, message.rows); } catch {}
+            try { stallScreen?.resize(message.cols, message.rows); } catch {}
             return;
           }
           if (message.type === 'input' && typeof message.data === 'string' && isTerminalReply(message.data)) {
@@ -1568,6 +1626,7 @@ function createCommonServer(options = {}) {
         lastSize = { cols: message.cols, rows: message.rows };
         signInPrivacy.resize(message.cols, message.rows);
         try { term.resize(message.cols, message.rows); } catch {}
+        try { stallScreen?.resize(message.cols, message.rows); } catch {}
       }
     });
     socket.on('close', () => { clients.delete(socket); removeActivityClient(socket); });
@@ -1980,6 +2039,7 @@ function createCommonServer(options = {}) {
     try { body = raw && JSON.parse(raw.toString('utf8')); } catch {}
     const event = body?.event;
     if (!['prompt', 'permission', 'question', 'answered', 'stop', 'idle'].includes(event)) return fileError(response, 400, 'invalid_event');
+    stallWatch?.progress();
     // A Stop during an update or restart is answered with nothing: the agent is about to go.
     // An interrupted/failed plugin turn is idle to viewers but is not a safe point for fleet
     // continuation. Keep that distinction instead of turning its idle report into a Stop.
@@ -2762,6 +2822,28 @@ function createCommonServer(options = {}) {
 
   // An idle agent's waiting messages, once the screen has been still long enough to tell.
   if (nextTurn) setIntervalImpl(deliverNextTurnIfIdle, 1_000);
+
+  if (stallWatch) {
+    let checkingStall = false;
+    setIntervalImpl(() => {
+      const busy = stallBusy();
+      stallWatch.busy(busy);
+      if (!busy || checkingStall || !stallScreen) return;
+      checkingStall = true;
+      // Through the write queue, so the rows include everything the PTY has sent so far.
+      new Promise(resolve => stallScreen.write('', resolve))
+        .then(() => {
+          const rows = stallScreenRows();
+          const screen = driver.progressScreen(rows);
+          stallWatch.observe(screen && { key: screen.key + '\n' + transcriptMark(), reconnecting: screen.reconnecting });
+          const minutes = mode === 'interactive' ? null : stallWatch.takeInterrupt();
+          if (minutes !== null) interruptStalledTurn(minutes);
+          publishActivity();
+        })
+        .catch(() => {})
+        .finally(() => { checkingStall = false; });
+    }, STALL_CHECK_MS);
+  }
 
   let ticksSinceUrlRefresh = 0;
   setIntervalImpl(() => {

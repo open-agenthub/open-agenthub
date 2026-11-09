@@ -110,4 +110,15 @@ Assert-ImageSet $override `
     'images.example.com/custom/codex-runtime:pinned' `
     'explicit overrides'
 
+# #562: the stalled-turn limits reach the backend, and 0 (off) is rendered as 0, not dropped.
+if ((Get-ConfigValue $default 'AgentHub__StalledTurnNoticeMinutes') -ne '20' -or
+    (Get-ConfigValue $default 'AgentHub__StalledTurnInterruptMinutes') -ne '60') {
+    throw 'default stalled-turn limits must render as 20 and 60 minutes.'
+}
+$stalledOff = Render-Chart @('--set', 'agent.stalledTurnNoticeMinutes=0', '--set', 'agent.stalledTurnInterruptMinutes=0')
+if ((Get-ConfigValue $stalledOff 'AgentHub__StalledTurnNoticeMinutes') -ne '0' -or
+    (Get-ConfigValue $stalledOff 'AgentHub__StalledTurnInterruptMinutes') -ne '0') {
+    throw 'stalled-turn limits set to 0 must render as 0.'
+}
+
 Write-Output 'Helm runtime image rendering assertions passed (default, dev, fallback, override).'

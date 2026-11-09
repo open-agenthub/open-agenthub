@@ -136,6 +136,14 @@ agent:
   trustedCaConfigMap: ""
   maxCpu: "2"
   maxMemory: 4Gi
+  # A turn can stop progressing without ending: the CLI waits on a model response that never
+  # finishes, or retries a model endpoint it cannot reach, for hours (docs/stalled-turns.md).
+  # After stalledTurnNoticeMinutes without progress the Workspace says so and offers Interrupt.
+  # After stalledTurnInterruptMinutes an Autonomous or Scheduled run, which nobody watches, is
+  # interrupted and ends as failed; an Interactive session is never interrupted for you.
+  # 0 turns either off. Takes effect when a session pod starts. Codex only for now.
+  stalledTurnNoticeMinutes: 20
+  stalledTurnInterruptMinutes: 60
   # Smallest CPU/memory request a session may ask for. Below it the pod reserves next to nothing
   # on its node and is among the first evicted under memory pressure (docs/session-resources.md).
   minCpu: 50m
