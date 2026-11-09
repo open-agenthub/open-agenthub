@@ -559,8 +559,8 @@ function createCommonServer(options = {}) {
   // lines about an interruption nobody in the session asked for.
   let stallInterruption = null;
   // The agent's screen as a terminal that saw every byte of this attempt. A replay of the
-  // scrollback's tail is not that: Codex redraws its timer every second, and after about three
-  // minutes the replayed window no longer reaches back to a full draw. The fragment it renders
+  // scrollback's tail is not that: with a CLI that redraws a timer every second, the replayed
+  // window no longer reaches back to a full draw after a few minutes. The fragment it renders
   // then differs at every check, which read as progress, so a stalled turn was never reported.
   let stallScreen = null;
   function stallScreenRows() {
