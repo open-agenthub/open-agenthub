@@ -101,7 +101,7 @@ test('a turn waiting for a person is not stalled', async () => {
 });
 
 test('an unattended run is interrupted once at the interrupt minutes, and says why', async () => {
-  const { h, pty, socket, check } = rig({ AGENTHUB_STALLED_TURN_INTERRUPT_MINUTES: '60' }, 'autonomous');
+  const { pty, socket, check } = rig({ AGENTHUB_STALLED_TURN_INTERRUPT_MINUTES: '60' }, 'autonomous');
   await check(0);
   await check(59);
   assert.deepEqual(pty.writes, []);
@@ -124,7 +124,7 @@ test('the failed run says it was interrupted for want of progress', async () => 
 });
 
 test('a run that moves right before the limit is not interrupted, and one that ended gets no key', async () => {
-  const { h, pty, check } = rig({ AGENTHUB_STALLED_TURN_INTERRUPT_MINUTES: '60' }, 'autonomous');
+  const { pty, check } = rig({ AGENTHUB_STALLED_TURN_INTERRUPT_MINUTES: '60' }, 'autonomous');
   await check(0);
   await check(59);
   // Its last output arrives in the same check that reaches the limit: that is progress.
@@ -136,7 +136,7 @@ test('a run that moves right before the limit is not interrupted, and one that e
 });
 
 test('0 turns the notice and the interrupt off', async () => {
-  const { h, pty, check } = rig({ AGENTHUB_STALLED_TURN_NOTICE_MINUTES: '0', AGENTHUB_STALLED_TURN_INTERRUPT_MINUTES: '0' }, 'autonomous');
+  const { pty, check } = rig({ AGENTHUB_STALLED_TURN_NOTICE_MINUTES: '0', AGENTHUB_STALLED_TURN_INTERRUPT_MINUTES: '0' }, 'autonomous');
   await check(0);
   assert.equal((await check(600)).stalled, undefined);
   assert.deepEqual(pty.writes, []);
