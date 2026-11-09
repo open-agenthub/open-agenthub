@@ -22,7 +22,7 @@ const { Terminal } = require('@xterm/headless');
 const WebSocket = require('ws');
 
 const HUB = 18400 + Math.floor(Math.random() * 500);
-const AGENT = HUB + 1000;
+const AGENT = Number(process.env.AGENT_PORT || HUB + 1000);
 const MODEL = HUB + 2000;
 const OUT = process.env.OUT || R + '/out-' + (process.env.SCENARIO || 'bg');
 fs.mkdirSync(OUT, { recursive: true });
@@ -37,6 +37,7 @@ const hubEvents = [];
 const openStreams = new Set();
 const peerPolls = [];
 let lastPrompt = '';
+let activeStart = 0;
 
 const sse = events => events.map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
 function lastItem(body) {
@@ -76,6 +77,30 @@ function model(parsed, sink) {
   if (isTitle) return finish([textItem(n, 'Rig title'), completed(n)]);
   const bg = user.match(/BG:(.+)$/m), fg = user.match(/FG:(.+)$/m), bgt = user.match(/BGT:(.+)$/m);
   const yld = user.match(/YIELD:(\d+):(.+)$/m), poll = user.match(/POLL:(\d+):(.+)$/m);
+  if (/ACTIVE/.test(user) && last.type === 'function_call_output') {
+    const sid = (String(last.output).match(/session ID (\d+)/) || [])[1];
+    if (sid && Date.now() - activeStart < Number(process.env.ACTIVE_MS || 240000)) return finish([callItem(n, 'write_stdin', { session_id: Number(sid), chars: '', yield_time_ms: Number(process.env.POLL_YIELD_MS || 20000) }), completed(n)]);
+    return finish([textItem(n, 'Build finished. ACK none'), completed(n)]);
+  }
+  if (/ACTIVE/.test(user)) { activeStart = Date.now(); return finish([callItem(n, 'exec_command', { cmd: 'for i in $(seq 1 100000); do echo build step $i; sleep 5; done', yield_time_ms: 1000 }), completed(n)]); }
+  if (/STREAMTEXT|STREAMREASON/.test(user) && last.type !== 'function_call_output') {
+    const reason = /STREAMREASON/.test(user);
+    const id = 'm' + n; const total = Number(process.env.STREAM_MS || 180000), every = Number(process.env.STREAM_EVERY_MS || 10000);
+    if (reason) sink.send([{ type: 'response.output_item.added', output_index: 0, item: { type: 'reasoning', id: 'rs' + n, summary: [] } }]);
+    else sink.send([{ type: 'response.output_item.added', output_index: 0, item: { type: 'message', role: 'assistant', id, content: [] } }]);
+    let k = 0, text = '';
+    const iv = setInterval(() => {
+      k++;
+      if (reason) sink.send([{ type: 'response.reasoning_summary_text.delta', item_id: 'rs' + n, output_index: 0, summary_index: k - 1, delta: '**Checking part ' + k + '**\n\nLooking at module ' + k + '.' }, { type: 'response.reasoning_summary_part.added', item_id: 'rs' + n, output_index: 0, summary_index: k }]);
+      else { const d = 'Line ' + k + ' of a long streamed answer.\n'; text += d; sink.send([{ type: 'response.output_text.delta', item_id: id, output_index: 0, content_index: 0, delta: d }]); }
+      if (k * every >= total) {
+        clearInterval(iv);
+        const done = reason ? [{ type: 'response.output_item.done', output_index: 0, item: { type: 'reasoning', id: 'rs' + n, summary: [{ type: 'summary_text', text: 'done' }] } }, textItem(n, 'Done thinking. ACK none')] : [{ type: 'response.output_item.done', output_index: 0, item: { type: 'message', role: 'assistant', id, content: [{ type: 'output_text', text }] } }];
+        finish([...done, completed(n)]);
+      }
+    }, every);
+    return;
+  }
   if (poll && last.type === 'function_call_output') {
     const items = parsed.input || [];
     let lu = -1; items.forEach((i, k) => { if (i.type === 'message' && i.role === 'user') lu = k; });
@@ -194,13 +219,14 @@ const env = {
   PATH: `${S}/clis/node_modules/.bin:/usr/local/bin:/usr/bin:/bin`,
   HOME: home, CODEX_HOME: home + '/.codex', TMPDIR: '/tmp', TERM: 'xterm-256color', LANG: 'C.UTF-8',
   CODEX_API_KEY: 'rig-key',
-  AGENTHUB_DRIVER: '/opt/session-agent/codex/driver.js', AGENTHUB_MODE: 'interactive', AGENTHUB_PORT: String(AGENT),
+  AGENTHUB_DRIVER: '/opt/session-agent/codex/driver.js', AGENTHUB_MODE: process.env.MODE || 'interactive', AGENTHUB_PROMPT: process.env.PROMPT || '', AGENTHUB_PORT: String(AGENT),
   AGENTHUB_SESSION_ID: 's1', AGENTHUB_CALLBACK_URL: `http://127.0.0.1:${HUB}/internal/sessions/s1`,
-  AGENTHUB_CALLBACK_TOKEN: 'rig-token', AGENTHUB_WORKDIR: R + '/work', AGENTHUB_SKILLS_SYNC_SECONDS: '0'
+  AGENTHUB_CALLBACK_TOKEN: 'rig-token', AGENTHUB_STALLED_TURN_NOTICE_MINUTES: process.env.NOTICE_MIN ?? '', AGENTHUB_STALLED_TURN_INTERRUPT_MINUTES: process.env.INTERRUPT_MIN ?? '', AGENTHUB_WORKDIR: R + '/work', AGENTHUB_SKILLS_SYNC_SECONDS: '0'
 };
 const proc = spawn(S + '/proot', ['-b', R + '/rt:/opt/session-agent', '-b', R + '/etc-codex:/etc/codex', '-b', R + '/etc-opencode:/etc/opencode', '-b', fs.mkdtempSync(R + '/tmp-run-') + ':/tmp',
   'node', '/opt/session-agent/server.js'], { env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
 proc.stdout.on('data', d => log.write('[sa] ' + d));
+proc.on('exit', c => say('session agent exited ' + c));
 proc.stderr.on('data', d => log.write('[sa!] ' + d));
 
 const term = new Terminal({ cols: 120, rows: 36, allowProposedApi: true });
@@ -237,8 +263,13 @@ async function main() {
   const aws = new WebSocket(`ws://127.0.0.1:${AGENT}/`);
   await new Promise((r, j) => { aws.once('open', r); aws.once('error', j); });
   aws.send(JSON.stringify({ type: 'subscribe', channel: 'activity' }));
-  aws.on('message', d => { const s = d.toString(); if (s.startsWith('{"type":"agenthub"')) { const f = JSON.parse(s); if (f.subtype === 'activity') { activity.push({ at: Date.now() - t0, state: f.state }); say('ACTIVITY ' + f.state + (f.reason ? ' ' + f.reason : '')); } } });
+  aws.on('message', d => { const s = d.toString(); if (s.startsWith('{"type":"agenthub"')) { const f = JSON.parse(s); if (f.subtype === 'activity') { activity.push({ at: Date.now() - t0, state: f.state, stalled: f.stalled }); say('ACTIVITY ' + f.state + (f.reason ? ' ' + f.reason : '') + (f.stalled ? ' STALLED ' + JSON.stringify(f.stalled) : '')); } } });
   const scenario = process.env.SCENARIO || 'bg';
+  if (process.env.MODE === 'autonomous') {
+    await sleep(Number(process.env.WATCH_MS || 30000)); dump('auto-1');
+    say('AUTO: sending Ctrl+C'); sendInput('\x03'); await sleep(8000); dump('auto-2');
+    say('AUTO RESULT: exited=' + proc.exitCode); return;
+  }
   await until(() => /context left|Ask Codex|›/.test(screen()), 60000, 'agent ready');
   await sleep(1500);
   dump('00-ready');
@@ -270,6 +301,26 @@ async function main() {
     report('a/interrupt', ['MSG-N', 'MSG-Q', 'MSG-P']);
     sendInput('/ps'); await sleep(400); sendInput('\r'); await sleep(2500);
     dump('a5-ps');
+    return;
+  }
+  if (scenario === 'serve') {
+    // For the browser proof: start the owner's stall, then let the web app do the rest.
+    await paste(process.env.SERVE_PROMPT || 'Please do the STALLTOOL task');
+    fs.writeFileSync(OUT + '/ready', String(AGENT));
+    const end = Date.now() + Number(process.env.HOLD_MS || 300000);
+    while (Date.now() < end && !fs.existsSync(OUT + '/stop')) await sleep(1000);
+    dump('serve-end');
+    say('SERVE RESULT: user texts the model saw after the stall: ' + JSON.stringify(modelRequests.filter(r => !r.isTitle && r.user).map(r => r.user.slice(-120))) + ' stalled frames=' + activity.filter(a => a.stalled).length);
+    return;
+  }
+  if (scenario === 'active') {
+    // Negative control: a long turn that keeps doing things must never be reported as stalled.
+    await paste(process.env.ACTIVE_PROMPT || 'Please run the ACTIVE build');
+    const total = Number(process.env.ACTIVE_MS || process.env.STREAM_MS || 240000);
+    for (let i = 1; i * 60000 <= total + 60000; i++) { await sleep(60000); dump('active-' + i); }
+    await until(() => curState() === 'idle', 120000, 'turn end');
+    dump('active-end');
+    say('ACTIVE RESULT: stalled frames=' + activity.filter(a => a.stalled).length + ' activity states=' + JSON.stringify([...new Set(activity.map(a => a.state))]) + ' model requests=' + modelRequests.filter(r => !r.isTitle).length);
     return;
   }
   if (scenario === 'idlebg') {
@@ -363,6 +414,8 @@ async function main() {
     say('STALL watched ' + ((Date.now() - stallAt) / 1000).toFixed(0) + 's; stream still open=' + (openStreams.size > 0));
     dump('b3-after-watch');
     report('b/after-watch', ['MSG-N', 'MSG-Q']);
+    const st = activity.find(a => a.stalled);
+    say('STALL NOTICE: ' + (st ? 'first stalled frame ' + ((st.at - (stallAt - t0)) / 1000).toFixed(0) + 's after the stall began: ' + JSON.stringify(st.stalled) : 'none') + '; last frame ' + JSON.stringify(activity[activity.length - 1]));
     if (openStreams.size) {
       await push('MSG-P', 'MSG-P: priority during the stall.', { priority: true });
       await sleep(8000);

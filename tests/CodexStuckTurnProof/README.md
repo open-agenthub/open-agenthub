@@ -10,7 +10,7 @@ turn "Working" with no end, and whether Workspace messages reach the agent durin
 S=<scratch dir>; mkdir -p $S/rig
 npm i --prefix $S/clis @openai/codex@<CODEX_VERSION from agent-runtime/codex/Dockerfile>
 curl -fsSL -o $S/proot https://proot.gitlab.io/proot/bin/proot && chmod +x $S/proot
-cp tests/CodexStuckTurnProof/{rig.mjs,build.sh,hang-mcp.cjs} $S/rig/
+cp tests/CodexStuckTurnProof/{rig.mjs,build.sh,hang-mcp.cjs,proofs.sh} $S/rig/
 (cd agent-runtime/session-agent && npm ci --ignore-scripts)
 R=$S/rig WT=$PWD/agent-runtime $S/rig/build.sh     # rerun after every runtime change
 ```
@@ -31,6 +31,30 @@ private `/tmp`. Run one scenario at a time, because all runs share the fixture H
 | `stalltool` | the model writes a sentence and starts `STALL_CMD` (default `sleep 1`) through exec in the same response. The request that carries the tool output then stalls. `INTERRUPT_PUSH=1` interrupts with a priority push instead of the Workspace interrupt |
 | `down` | the model endpoint refuses connections; `RESTORE=1` brings it back |
 | `compact` | `/compact` |
+| `active` | negative control. `ACTIVE_PROMPT` with `ACTIVE` runs a build and polls it with `write_stdin` every `POLL_YIELD_MS` (20 s) for `ACTIVE_MS`. With `STREAMTEXT` or `STREAMREASON` (needs `WS=1`), the model streams text or reasoning-summary deltas every `STREAM_EVERY_MS` for `STREAM_MS` |
+| `serve` | starts the owner's stall and keeps the agent up on `AGENT_PORT` for the browser proof until `$OUT/stop` exists |
+
+`NOTICE_MIN` and `INTERRUPT_MIN` set `AGENTHUB_STALLED_TURN_NOTICE_MINUTES` and
+`AGENTHUB_STALLED_TURN_INTERRUPT_MINUTES`. `MODE=autonomous PROMPT=…` runs `codex exec` the way
+an Autonomous session does. `proofs.sh` runs the detection proofs of #562 one after another:
+the negative controls, the autonomous interrupt, an interactive session that is never
+interrupted, and the reconnect reason.
+
+## Browser
+
+`hub.mjs` is a stand-in hub on :8080. It answers the web app's `/api` calls for one running Codex
+session and proxies its terminal socket to the rig's agent. `browser.mjs` opens the session in
+Chromium (Playwright headless shell, libraries as in the rootless-chromium setup), sends a message
+from the composer and waits for the stall notice. It then screenshots desktop and 390 px widths,
+clicks Interrupt and checks that the notice goes:
+
+```bash
+(cd frontend && npx vite --port 5173 --strictPort) &
+AGENT_PORT=19778 NOTICE_MIN=1 WS=1 KEEPALIVE_MS=5000 STALL_CMD='sleep infinity' SCENARIO=serve OUT=$O node $S/rig/rig.mjs &
+RT=$S/rig/rt AGENT_PORT=19778 node tests/CodexStuckTurnProof/hub.mjs &
+RT=$S/rig/rt OUT=$O NOTICE_WAIT_MS=150000 node tests/CodexStuckTurnProof/browser.mjs; touch $O/stop
+```
+
 
 Stall options: `WS=1` uses the Responses WebSocket transport. `KEEPALIVE_MS` sends a `response.in_progress` event (or `KEEPALIVE_TYPE`) at that interval while the stream is stalled. `PING_MS` sends WebSocket pings. `IDLE_MS` sets `stream_idle_timeout_ms`; Codex's default is used without it. The owner's screen in #562 comes from:
 
