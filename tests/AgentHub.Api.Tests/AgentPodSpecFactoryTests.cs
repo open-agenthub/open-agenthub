@@ -429,6 +429,23 @@ public class AgentPodSpecFactoryTests
     }
 
 
+    // #562: the runtime reads the stalled-turn limits from the pod; the defaults reach it unless
+    // the chart sets other values, and 0 has to arrive as 0 (off), not as "unset".
+    [Fact]
+    public void Build_PassesTheStalledTurnLimits()
+    {
+        var env = Assert.Single(Build(AgentKind.Codex, AgentAuthMode.ApiKey).Containers).Env;
+        Assert.Equal("20", env.Single(item => item.Name == "AGENTHUB_STALLED_TURN_NOTICE_MINUTES").Value);
+        Assert.Equal("60", env.Single(item => item.Name == "AGENTHUB_STALLED_TURN_INTERRUPT_MINUTES").Value);
+
+        var request = new CreateSessionRequest { Agent = AgentKind.Codex, AuthMode = AgentAuthMode.ApiKey, Mode = SessionMode.Autonomous, Prompt = "work" };
+        var off = AgentPodSpecFactory.Build(Record(AgentKind.Codex, AgentAuthMode.ApiKey, SessionMode.Autonomous), request,
+            Context() with { Runtime = new AgentPodRuntimeSettings { StalledTurnNoticeMinutes = 0, StalledTurnInterruptMinutes = 0 } });
+        var offEnv = Assert.Single(off.Containers).Env;
+        Assert.Equal("0", offEnv.Single(item => item.Name == "AGENTHUB_STALLED_TURN_NOTICE_MINUTES").Value);
+        Assert.Equal("0", offEnv.Single(item => item.Name == "AGENTHUB_STALLED_TURN_INTERRUPT_MINUTES").Value);
+    }
+
     [Fact]
     public void Build_ClaudeAutoPreservesLegacyPodShape()
     {

@@ -2875,7 +2875,9 @@ public sealed partial class KubernetesSessionService : ISessionService, IExecuti
                 MaxMemory = _opts.MaxMemory,
                 TelemetryEnabled = _opts.TelemetryEnabled,
                 TelemetryOtlpEndpoint = _opts.TelemetryOtlpEndpoint,
-                AccountLimitThreshold = Math.Clamp(_opts.AccountLimitThreshold, 1, 100)
+                AccountLimitThreshold = Math.Clamp(_opts.AccountLimitThreshold, 1, 100),
+                StalledTurnNoticeMinutes = Math.Clamp(_opts.StalledTurnNoticeMinutes, 0, 1440),
+                StalledTurnInterruptMinutes = Math.Clamp(_opts.StalledTurnInterruptMinutes, 0, 1440)
             }
         };
     }
@@ -3134,4 +3136,10 @@ public sealed class AgentHubOptions
     /// account as at its limit (docs/account-limits.md). 100 reports the limit itself; lower
     /// values switch accounts early and spend a second window on work the first could still do.</summary>
     public int AccountLimitThreshold { get; set; } = 100;
+    /// <summary>Minutes a session's turn may go without progress before the Workspace shows it as
+    /// possibly stuck, with Interrupt (docs/stalled-turns.md); 0 turns the notice off.</summary>
+    public int StalledTurnNoticeMinutes { get; set; } = 20;
+    /// <summary>Minutes without progress after which the runtime interrupts an Autonomous or
+    /// Scheduled run, which nobody watches; 0 turns it off. Never applies to Interactive sessions.</summary>
+    public int StalledTurnInterruptMinutes { get; set; } = 60;
 }

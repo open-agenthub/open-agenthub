@@ -104,6 +104,9 @@ function validateDriver(driver) {
     throw new Error('Agent driver isTurnInterrupt must be a function');
   }
   // Optional: an authoritative failed/aborted turn marker, for paths without a Stop hook.
+  if (driver.progressScreen !== undefined && typeof driver.progressScreen !== 'function') {
+    throw new Error('Agent driver progressScreen must be a function');
+  }
   if (driver.failedTurnEnded !== undefined && typeof driver.failedTurnEnded !== 'function') {
     throw new Error('Agent driver failedTurnEnded must be a function');
   }

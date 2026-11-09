@@ -257,6 +257,21 @@ function nativeIdentity({ file, env, fs: fileSystem }) {
     (/-([0-9a-f-]{36})\.jsonl$/i.exec(path.basename(file)) || [])[1] || path.basename(file);
 }
 
+// The screen without what the TUI animates on its own while a turn runs (#562,
+// docs/stalled-turns.md). Verified on 0.167.0: the status row's bullet alternates • and ◦, and
+// its parenthesis counts the turn's time, as in "◦ Working (2m 29s • esc to interrupt) · 1
+// background terminal running". Everything else on the screen, the status row's header
+// included, only changes when the turn does something. "Reconnecting... waiting for network" is
+// the status row of a model endpoint Codex cannot reach; it retries that with no limit.
+function progressScreen(rows) {
+  let reconnecting = false;
+  const key = rows.map(row => {
+    if (/\bReconnecting\.\.\. waiting for network\b/.test(row)) reconnecting = true;
+    return row.replace(/\([^()]*\besc to interrupt\)/, '()').replace(/^(\s*)[•◦](?=\s)/, '$1');
+  }).join('\n');
+  return { key, reconnecting };
+}
+
 module.exports = {
   supportsProviderSwitch: true,
   providerSwitchExitKeys: ['/exit', '\r'],
@@ -265,6 +280,7 @@ module.exports = {
     context.env, codexHome(context.env), context.fs, nativeIdentity(context)),
   modelCatalog: require('./model-catalog'),
   failedTurnEnded: require('./turn-activity').failedTurnEnded,
+  progressScreen,
   // /clear, not /new: both start a fresh thread and keep the old one resumable, but from 0.165.0
   // /new in a git checkout first asks "Where should the new conversation run?", and the
   // `worktrees = false` requirement that suppressed it is ignored as a removed feature. The

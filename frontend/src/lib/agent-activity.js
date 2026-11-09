@@ -10,9 +10,17 @@ export function parseActivityFrame(data) {
       ? { state: frame.state, source: frame.source,
           ...(typeof frame.ready === 'boolean' ? { ready: frame.ready } : {}),
           ...(['approval', 'answer'].includes(frame.reason) ? { reason: frame.reason } : {}),
-          ...(frame.reason === 'answer' && Array.isArray(frame.questions) ? { questions: questionsOf(frame.questions) } : {}) }
+          ...(frame.reason === 'answer' && Array.isArray(frame.questions) ? { questions: questionsOf(frame.questions) } : {}),
+          ...(stalledOf(frame.stalled) ? { stalled: stalledOf(frame.stalled) } : {}) }
       : null
   } catch { return null }
+}
+
+// A turn without progress for this long (#562, docs/stalled-turns.md); the runtime sends it only
+// once its notice threshold has passed.
+function stalledOf(value) {
+  if (!value || !Number.isInteger(value.minutes) || value.minutes < 0) return null
+  return { minutes: value.minutes, reason: value.reason === 'reconnecting' ? 'reconnecting' : 'no_progress' }
 }
 
 // The open question tool's questions as the runtime relays them from the tool's input (#343).
