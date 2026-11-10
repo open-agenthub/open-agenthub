@@ -19,13 +19,15 @@ public class McpSecretProtectorTests
     public void Protect_Unprotect_RoundTripsPlaintext()
     {
         var protector = CreateProtector();
-        const string plaintext = """{"token":"s3cr3t"}""";
+        const string canary = "B9rT2wK7mP4xV6nH1qL8sF3jD5zC0yUa";
+        var plaintext = $$"""{"token":"{{canary}}"}""";
 
         var protectedPayload = protector.Protect(plaintext);
 
         Assert.NotNull(protectedPayload);
         Assert.NotEqual(plaintext, protectedPayload);
-        Assert.DoesNotContain("s3cr3t", protectedPayload);
+        // A short token can occur by chance in randomized base64 ciphertext.
+        Assert.DoesNotContain(canary, protectedPayload);
         Assert.Equal(plaintext, protector.Unprotect(protectedPayload));
     }
 
