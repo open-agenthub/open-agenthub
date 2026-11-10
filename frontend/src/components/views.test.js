@@ -194,6 +194,22 @@ describe('TerminalView session identity', () => {
     // #113: the Workspace shows the saved conversation; there is no separate Transcript tab.
     expect(terminal.findAll('.tabs button').map(b => b.text())).not.toContain('Transcript')
   })
+
+  // #495: a shared chat session must keep its chat transport. The terminal composer's keystrokes
+  // never reach a piped CLI, so a Collaborator given it types into nothing.
+  it('gives a shared streaming session the chat stream, writable by role', () => {
+    const stubs = { TerminalPane: true, WorkspaceStream: true, WorkspaceComposer: true, ShareSessionDialog: true }
+    const shared = role => mount(TerminalView, {
+      props: { session: { id: 'c2', title: 'Chat', phase: 'Running', mode: 'Interactive', agent: 'Claude', uiMode: 'chat', accessRole: role, sharedBy: 'alice' } },
+      global: { stubs }
+    })
+    for (const [role, readonly] of [['Collaborator', false], ['Viewer', true]]) {
+      const view = shared(role)
+      expect(view.findComponent({ name: 'WorkspaceStream' }).props('readonly')).toBe(readonly)
+      expect(view.findComponent({ name: 'WorkspaceComposer' }).exists()).toBe(false)
+      expect(view.findComponent({ name: 'TerminalPane' }).exists()).toBe(false)
+    }
+  })
 })
 
 import NewSessionDialog from './NewSessionDialog.vue'
