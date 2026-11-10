@@ -140,7 +140,8 @@ public class LibraryStoresPostgresTests
     public async Task McpServerStore_PersistsKindAndSecretJson()
     {
         await using var db = await PostgresLibraryDatabase.CreateAsync();
-        const string plaintext = "{\"token\":\"abc\"}";
+        const string canary = "Q7mV4xN9bK2pR8tW5zH3cF6jL1sD0yUa";
+        var plaintext = $$"""{"token":"{{canary}}"}""";
         var created = await db.McpServers.CreateAsync(
             "alice",
             ApiRequest("gateway", "API wrap", secretJson: plaintext));
@@ -159,7 +160,8 @@ public class LibraryStoresPostgresTests
         Assert.Equal("api", kind);
         Assert.NotNull(secretAtRest);
         Assert.NotEqual(plaintext, secretAtRest);
-        Assert.DoesNotContain("abc", secretAtRest);
+        // A short token can occur by chance in randomized base64 ciphertext.
+        Assert.DoesNotContain(canary, secretAtRest);
 
         var preserved = await db.McpServers.UpdateAsync(
             "alice", created.Id, ApiRequest("gateway", secretJson: null));
@@ -294,7 +296,8 @@ public class LibraryStoresPostgresTests
     public async Task EphemeralApiMcpStore_RegisterGetAndDeleteBySession()
     {
         await using var db = await PostgresLibraryDatabase.CreateAsync();
-        const string secret = """{"token":"ephemeral-secret"}""";
+        const string canary = "T6vQ9nB2xK7mR4pH8sF1jL5zD3wC0yUa";
+        var secret = $$"""{"token":"{{canary}}"}""";
         await db.EphemeralApiMcps.RegisterAsync(new EphemeralApiMcpEntry(
             "sess-1", "books", "alice",
             """{"specType":"graphql","specUrl":"https://api.example.test/schema.graphql"}""",
@@ -320,7 +323,7 @@ public class LibraryStoresPostgresTests
             new NpgsqlParameter("n", "books"));
         Assert.NotNull(secretAtRest);
         Assert.NotEqual(secret, secretAtRest);
-        Assert.DoesNotContain("ephemeral-secret", secretAtRest);
+        Assert.DoesNotContain(canary, secretAtRest);
 
         await db.EphemeralApiMcps.DeleteBySessionAsync("sess-1");
         Assert.Null(await db.EphemeralApiMcps.GetAsync("sess-1", "books"));
