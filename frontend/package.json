@@ -28,6 +28,9 @@
     "vitest": "^5.1.0"
   },
   "overrides": {
-    "minimatch": "^11.0.2"
+    "minimatch": "^11.0.2",
+    "js-beautify": {
+      "glob": "^14.0.4"
+    }
   }
 }
