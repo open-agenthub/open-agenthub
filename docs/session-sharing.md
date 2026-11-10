@@ -201,6 +201,22 @@ offered.
 A child whose parent the caller cannot open (it was shared directly, the parent was not) names no
 parent, so the list never leaks the id of a session the caller cannot see.
 
+### The recipient's view uses the session's own transport (#495)
+
+`SharedSessionInfo.uiMode` is the session's stored `ui_mode`, on every path: listing, named,
+inherited, project and link. The web app picks the transport from it, the same way it does for the
+owner. A legacy `chat` session reads chat frames only. A recipient view that defaulted to
+`terminal` drew the terminal composer, and its keystrokes went into the piped CLI's socket, which
+ignores them. The Collaborator's message was accepted and never reached the agent. Releases
+before 1.21.0 behaved this way, because the share store's session columns had no `ui_mode`.
+`SharedChatModePostgresTests` pins each path.
+
+Rejected: having the chat-mode pod also accept terminal `input` frames and turn them into turns.
+Keystrokes are not messages. A paste, an Enter or an arrow key has no turn boundary to map to.
+The fix would also have hidden a projection that was wrong about the session in other ways too.
+The role still decides who may send: a Viewer gets the chat stream read-only, and the proxy does
+not forward a Viewer's frames at all.
+
 ### Counters, filters and alerts
 
 The status filters treat a shared session like any other: "Question open" and "Waiting" find it
