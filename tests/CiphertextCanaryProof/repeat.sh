@@ -5,7 +5,4 @@ cd "$(dirname "$0")/../.."
 project=tests/AgentHub.Api.Tests
 filter='FullyQualifiedName~LibraryStoresPostgresTests|FullyQualifiedName~McpSecretProtectorTests'
 dotnet test "$project" --filter "$filter"
-for ((run=1; run<=200; run++)); do
-    dotnet test "$project" --no-build --no-restore --filter 'FullyQualifiedName~LibraryStoresPostgresTests.McpServerStore_PersistsKindAndSecretJson'
-    echo "Completed $run/200"
-done
+dotnet run --project tests/CiphertextCanaryProof/CiphertextCanaryProof.csproj
