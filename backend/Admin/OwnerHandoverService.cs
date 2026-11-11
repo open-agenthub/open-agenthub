@@ -97,8 +97,9 @@ public sealed class OwnerHandoverService(
             throw new HandoverRefusedException(409, "nothing_to_move", $"{from} owns nothing to hand over.");
 
         var scheduled = inventory.Sessions.Where(s => s.Mode == "Scheduled").Select(s => s.Id).ToList();
+        // Usernames come from identity-provider claims; a line break in one must not forge a log entry.
         log.LogInformation("Owner handover {From} -> {To} started by {Admin}: {Sessions} sessions, credentials {Credentials}",
-            from, to, admin, inventory.Sessions.Count, plan.Credentials);
+            Safe(from), Safe(to), Safe(admin), inventory.Sessions.Count, plan.Credentials);
         // Suspended for the whole move: a run starting in between would mount the source's secrets
         // and write to the source's prefix after its objects were copied.
         if (runtime is not null && scheduled.Count > 0) await runtime.SuspendSchedulesAsync(scheduled, true, ct);
@@ -122,7 +123,7 @@ public sealed class OwnerHandoverService(
             await RestoreSchedulesAsync(scheduled);
             throw;
         }
-        log.LogInformation("Owner handover {Id} committed: {From} -> {To}, {Counts}", entry.Id, from, to,
+        log.LogInformation("Owner handover {Id} committed: {From} -> {To}, {Counts}", entry.Id, Safe(from), Safe(to),
             string.Join(", ", entry.Counts.Where(kv => kv.Value > 0).Select(kv => $"{kv.Key}={kv.Value}")));
         var done = await FinishAsync(entry, ct);
         return new HandoverResult(entry, !done);
@@ -163,6 +164,8 @@ public sealed class OwnerHandoverService(
             return false;
         }
     }
+
+    private static string Safe(string value) => Auth.ApiKeyFailureLimiter.LogSafe(value);
 
     private async Task RestoreSchedulesAsync(IReadOnlyCollection<string> scheduled)
     {
