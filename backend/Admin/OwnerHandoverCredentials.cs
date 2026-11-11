@@ -83,9 +83,8 @@ public static class OwnerHandoverCredentials
         var theirs = ProviderAccountSecret.Read(source, agent);
         if (theirs.Accounts.Count == 0) return new CredentialMerge(Copy(target), []);
         var hadAny = mine.Accounts.Count > 0;
-        foreach (var account in theirs.Accounts)
+        foreach (var account in theirs.Accounts.Where(a => mine.Find(a.Id) is null).ToList())
         {
-            if (mine.Find(account.Id) is not null) continue;
             mine.Accounts.Add(new ProviderAccount
             {
                 Id = account.Id, Label = account.Label, Identity = account.Identity, CreatedAt = account.CreatedAt,

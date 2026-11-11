@@ -146,8 +146,11 @@ public sealed class OwnerHandoverService(
                 foreach (var id in entry.ScheduledIds)
                 {
                     try { await runtime.RebuildScheduleAsync(entry.To, id, ct); }
-                    // Gone since: deleted by its new owner, nothing left to rebuild.
-                    catch (KeyNotFoundException) { }
+                    catch (KeyNotFoundException)
+                    {
+                        // Deleted by its new owner since the switch: nothing left to rebuild.
+                        log.LogInformation("Owner handover {Id}: scheduled session {Session} is gone; no schedule to rebuild", entry.Id, id);
+                    }
                 }
             if (artifacts.IsConfigured)
                 foreach (var id in entry.SessionIds)

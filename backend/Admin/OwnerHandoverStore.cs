@@ -74,6 +74,7 @@ public sealed class OwnerHandoverStore
     private readonly NpgsqlDataSource _db;
     private readonly Func<string, CancellationToken, Task>? _beforeStep;
 
+    /// <summary>Creates the store on the shared Postgres pool.</summary>
     /// <param name="beforeStep">Called with the table name before each write of the switch; tests
     /// throw from it to prove that a failure part-way leaves nothing changed.</param>
     public OwnerHandoverStore(IConfiguration cfg, Func<string, CancellationToken, Task>? beforeStep = null)
@@ -335,9 +336,8 @@ public sealed class OwnerHandoverStore
             [UsageLimits] = await Count("usage_limits", "SELECT count(*) FROM usage_limits WHERE scope = 'user' AND target = @f"),
         };
         long chats = 0;
-        foreach (var table in new[] { "chat_session_bindings", "slack_threads" })
+        foreach (var table in new[] { "chat_session_bindings", "slack_threads" }.Where(tables.Contains))
         {
-            if (!tables.Contains(table)) continue;
             await using var cmd = new NpgsqlCommand($"SELECT count(*) FROM {table} WHERE session_id = ANY(@ids)", conn, tx);
             cmd.Parameters.AddWithValue("ids", ids);
             chats += Convert.ToInt64(await cmd.ExecuteScalarAsync(ct));

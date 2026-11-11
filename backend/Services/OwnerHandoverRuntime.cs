@@ -136,7 +136,11 @@ public sealed partial class KubernetesSessionService : IOwnerHandoverRuntime
         var name = $"session-{sessionId}";
         V1CronJob? cron = null;
         try { cron = await _k8s.BatchV1.ReadNamespacedCronJobAsync(name, _opts.Namespace, cancellationToken: ct); }
-        catch (k8s.Autorest.HttpOperationException e) when (e.Response.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+        catch (k8s.Autorest.HttpOperationException e) when (e.Response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // Deleted by an earlier attempt that failed before the new one was created.
+            _log.LogDebug("No schedule to replace for session {Id}", sessionId);
+        }
         // Already rebuilt by an earlier attempt: labelled for the owner and no longer marked.
         string? labelled = null, before = null;
         cron?.Metadata.Labels?.TryGetValue(OwnerLabel, out labelled);
