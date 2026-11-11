@@ -45,6 +45,17 @@ describe('HandoverCard', () => {
     expect(wrapper.find('[data-handover]').exists()).toBe(false)
   })
 
+  // #574: the owner name may well be a person's; what matters is that the data is not tied to a
+  // team-login identity until it is handed over.
+  it('says the data belongs to the configured API-key owner account', async () => {
+    const wrapper = mount(HandoverCard)
+    await flushPromises()
+    const intro = wrapper.find('[data-handover-intro]').text().replace(/\s+/g, ' ')
+    expect(intro).toContain('Data created with the API key belongs to the configured API-key owner account, '
+      + 'rather than automatically to a team-login (OIDC) identity.')
+    expect(intro).not.toContain('not to a person')
+  })
+
   it('leaves credentials with the old owner unless ticked, and says so per kind', async () => {
     mocks.api.previewHandover.mockResolvedValue(preview())
     const wrapper = mount(HandoverCard)
