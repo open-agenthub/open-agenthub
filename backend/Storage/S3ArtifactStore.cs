@@ -6,6 +6,9 @@ namespace AgentHub.Api.Storage;
 
 public sealed record ArtifactObjectInfo(long Size, string? ContentType);
 
+/// <summary>One object under a prefix, as a listing returns it.</summary>
+public sealed record ArtifactListing(string Key, long Size);
+
 /// <summary>
 /// Storage in S3 or any S3-compatible server. The agent pod never receives S3 credentials,
 /// only time-limited presigned URLs.
@@ -43,6 +46,12 @@ public interface IArtifactStore
     Task DeleteByPrefixAsync(string prefix, CancellationToken ct = default) => Task.CompletedTask;
     IAsyncEnumerable<string> ListSessionPrefixesAsync(CancellationToken ct = default)
         => throw new NotSupportedException("Session prefix enumeration is unavailable.");
+    /// <summary>Every object under a non-empty prefix, page by page.</summary>
+    IAsyncEnumerable<ArtifactListing> ListObjectsAsync(string prefix, CancellationToken ct = default)
+        => throw new NotSupportedException("Object listing is unavailable.");
+    /// <summary>Server-side copy; the bytes do not pass through the backend.</summary>
+    Task CopyObjectAsync(string sourceKey, string destinationKey, long size, CancellationToken ct = default)
+        => throw new NotSupportedException("Object copy is unavailable.");
     Task<ArtifactObjectInfo?> HeadAsync(string key, CancellationToken ct = default) => Task.FromResult<ArtifactObjectInfo?>(null);
     Task<Stream?> OpenReadAsync(string key, CancellationToken ct = default) => Task.FromResult<Stream?>(null);
     /// <summary>Streams <paramref name="length"/> bytes from <paramref name="from"/>. The default
@@ -354,6 +363,63 @@ public sealed class S3ArtifactStore : IArtifactStore
             }
             request.ContinuationToken = page.NextContinuationToken;
         } while (page.IsTruncated);
+    }
+
+    public async IAsyncEnumerable<ArtifactListing> ListObjectsAsync(string prefix,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(prefix)) throw new ArgumentException("Prefix is required.", nameof(prefix));
+        var request = new ListObjectsV2Request { BucketName = _bucket, Prefix = prefix };
+        ListObjectsV2Response page;
+        do
+        {
+            page = await _s3.ListObjectsV2Async(request, ct);
+            foreach (var o in page.S3Objects ?? []) yield return new ArtifactListing(o.Key, o.Size);
+            request.ContinuationToken = page.NextContinuationToken;
+        } while (page.IsTruncated);
+    }
+
+    /// <summary>S3 copies at most 5 GiB in one request; a larger object (a big workspace archive)
+    /// is copied in parts, otherwise the handover would fail on exactly the sessions with the most
+    /// to lose.</summary>
+    private const long SingleCopyLimit = 5L * 1024 * 1024 * 1024;
+    private const long CopyPartSize = 512L * 1024 * 1024;
+
+    public async Task CopyObjectAsync(string sourceKey, string destinationKey, long size, CancellationToken ct = default)
+    {
+        if (size < SingleCopyLimit)
+        {
+            await _s3.CopyObjectAsync(new CopyObjectRequest
+            {
+                SourceBucket = _bucket, SourceKey = sourceKey, DestinationBucket = _bucket, DestinationKey = destinationKey,
+            }, ct);
+            return;
+        }
+        var upload = await _s3.InitiateMultipartUploadAsync(new InitiateMultipartUploadRequest { BucketName = _bucket, Key = destinationKey }, ct);
+        try
+        {
+            var parts = new List<PartETag>();
+            var number = 1;
+            for (long offset = 0; offset < size; offset += CopyPartSize, number++)
+            {
+                var part = await _s3.CopyPartAsync(new CopyPartRequest
+                {
+                    SourceBucket = _bucket, SourceKey = sourceKey, DestinationBucket = _bucket, DestinationKey = destinationKey,
+                    UploadId = upload.UploadId, PartNumber = number,
+                    FirstByte = offset, LastByte = Math.Min(offset + CopyPartSize, size) - 1,
+                }, ct);
+                parts.Add(new PartETag(number, part.ETag));
+            }
+            await _s3.CompleteMultipartUploadAsync(new CompleteMultipartUploadRequest
+            {
+                BucketName = _bucket, Key = destinationKey, UploadId = upload.UploadId, PartETags = parts,
+            }, ct);
+        }
+        catch
+        {
+            await _s3.AbortMultipartUploadAsync(_bucket, destinationKey, upload.UploadId, CancellationToken.None);
+            throw;
+        }
     }
 
     public async IAsyncEnumerable<string> ListSessionPrefixesAsync(

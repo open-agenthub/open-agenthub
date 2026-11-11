@@ -1713,25 +1713,28 @@ public sealed partial class KubernetesSessionService : ISessionService, IExecuti
         // Somebody wanted this session back: a resume restarts the idle countdown.
         await _store.TouchActivityAsync(id, ct);
 
-        var req = new CreateSessionRequest
-        {
-            Title = rec.Title, Description = rec.Description, Mode = rec.Mode, UiMode = rec.UiMode,
-            Repos = ParseRepos(rec), McpConfigJson = rec.McpConfigJson,
-            McpServerIds = ParseMcpServerIds(rec),
-            ProjectId = rec.ProjectId, Prompt = rec.Prompt, SystemPrompt = rec.SystemPrompt,
-            Agent = rec.Agent, AuthMode = rec.AuthMode, OpenClawApiKeySource = rec.OpenClawApiKeySource,
-            CredentialId = rec.CredentialId,
-            GitPatIds = GitPatSelection.Parse(rec.GitPatIdsJson)?.ToList(),
-            SecretIds = SessionSecretSelection.Parse(rec.SecretIdsJson)?.ToList(),
-            Policy = ParsePolicy(rec),
-            AllowedTools = ParseAllowedTools(rec),
-            Image = rec.Image, RunAsRoot = rec.RunAsRoot, AutoApprove = rec.AutoApprove,
-            Cpu = rec.Cpu, Memory = rec.Memory, CpuLimit = rec.CpuLimit, MemoryLimit = rec.MemoryLimit
-        };
+        var req = RequestFromRecord(rec);
         await SpawnAsync(owner, rec, req, resume: true, ct);
         _log.LogInformation("Resuming session {Id} (claudeSessionId={Csid})", id, rec.AgentSessionId);
         return await ToInfoAsync(rec, phase: rec.Status, podIp: null, ct: ct);
     }
+
+    /// <summary>The create request a stored session amounts to; a resume and a rebuilt schedule start from it.</summary>
+    private static CreateSessionRequest RequestFromRecord(SessionRecord rec) => new()
+    {
+        Title = rec.Title, Description = rec.Description, Mode = rec.Mode, UiMode = rec.UiMode,
+        Repos = ParseRepos(rec), McpConfigJson = rec.McpConfigJson,
+        McpServerIds = ParseMcpServerIds(rec),
+        ProjectId = rec.ProjectId, Prompt = rec.Prompt, SystemPrompt = rec.SystemPrompt,
+        Agent = rec.Agent, AuthMode = rec.AuthMode, OpenClawApiKeySource = rec.OpenClawApiKeySource,
+        CredentialId = rec.CredentialId,
+        GitPatIds = GitPatSelection.Parse(rec.GitPatIdsJson)?.ToList(),
+        SecretIds = SessionSecretSelection.Parse(rec.SecretIdsJson)?.ToList(),
+        Policy = ParsePolicy(rec),
+        AllowedTools = ParseAllowedTools(rec),
+        Image = rec.Image, RunAsRoot = rec.RunAsRoot, AutoApprove = rec.AutoApprove,
+        Cpu = rec.Cpu, Memory = rec.Memory, CpuLimit = rec.CpuLimit, MemoryLimit = rec.MemoryLimit
+    };
 
     /// <summary>
     /// Turns a finished or paused autonomous session into an interactive one and resumes it
