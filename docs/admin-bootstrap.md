@@ -78,8 +78,9 @@ What the hub does about it:
 - **Seat.** The key owner keeps its row in *Users & seats* with a seat; revoke it there.
 
 What the operator does, before switching: either pick a key owner name nobody can register at the
-provider (`auth.apiKey.owner`, ideally from the start), or move or delete the data. A tool that
-hands the data to a chosen OIDC user is a separate issue.
+provider (`auth.apiKey.owner`, ideally from the start), or move or delete the data. After the
+switch, an admin hands the data to the OIDC user it belongs to in *Users & seats*
+(`docs/apikey-handover.md`).
 
 Rejected alternatives:
 
