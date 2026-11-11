@@ -75,3 +75,18 @@ no more. An account identity is not inferred from a bearer link: that would fals
 anonymous holder to its issuer. The audit's nullable sender-session field represents external
 clients, which have no originating session; user sends retain their owner, while link sends use
 the anonymous attribution. Message bodies and tokens are absent from audit rows.
+
+## Inbox delivery to legacy chat sessions (#568)
+
+The legacy chat runtime has a live chat pipe, but no automatic inbox handoff between
+turns. Named Collaborator sends and Collaborator link sends use the inbox. Normal
+same-owner fleet sends also fall back to that inbox when the chat runtime declines
+them. These sends now fail before inserting a message or a cross-owner audit row.
+The error directs an owner or Collaborator to type into the session's conversation.
+
+Using the owned priority push path for shared sends was rejected because it bypasses
+the normal-priority sharing contract. A separate shared delivery path would need its
+own acceptance and retry semantics before it could acknowledge a message. Existing
+owned priority sends still use the live chat pipe. Previously queued rows stay in
+the inbox and can still be retrieved through an explicit inbox read. There is no
+migration, automatic replay, or deletion.

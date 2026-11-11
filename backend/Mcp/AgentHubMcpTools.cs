@@ -473,7 +473,10 @@ public sealed class AgentHubMcpTools(
             }
             catch (KeyNotFoundException) { throw new McpException("agent_not_found"); }
             catch (ArgumentException error) { throw new McpException(error.Message); }
+            catch (ChatInboxUnsupportedException error) { throw new McpException(error.Message); }
         }
+        if (AgentMessaging.RequiresChatInbox(target.UiMode, isPriority))
+            throw new McpException(ChatInboxUnsupportedException.Detail);
         var record = new SessionMessageRecord
         {
             Id = Guid.NewGuid().ToString("n")[..12],

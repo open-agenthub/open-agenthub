@@ -147,6 +147,7 @@ export class SessionsBackendClient {
 function errorDetail(bytes) {
   try {
     const parsed = JSON.parse(new TextDecoder().decode(bytes));
+    if (parsed?.code === 'chat_inbox_unsupported') return parsed.code;
     return typeof parsed?.error === 'string' ? parsed.error.slice(0, 1000) : undefined;
   } catch { return undefined; }
 }

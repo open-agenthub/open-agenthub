@@ -66,9 +66,26 @@ public static class MessageDeliveryVia
     public const string NextTurn = "next_turn";
 }
 
+public sealed class ChatInboxUnsupportedException() : InvalidOperationException(Detail)
+{
+    public const string Code = "chat_inbox_unsupported";
+    public const string Detail = "This session runs in chat mode and cannot receive inbox messages. "
+        + "Type into its conversation as the owner or a Collaborator instead.";
+}
+
 /// <summary>Shared limits and normalization for agent-to-agent messages.</summary>
 public static class AgentMessaging
 {
+    // Legacy chat has no next-turn inbox drain. Owned priority sends use the live chat pipe.
+    public static bool RequiresChatInbox(string uiMode, bool priority)
+        => uiMode == SessionUiMode.Chat && !priority;
+
+    public static void EnsureInboxSupported(string uiMode)
+    {
+        if (RequiresChatInbox(uiMode, priority: false))
+            throw new ChatInboxUnsupportedException();
+    }
+
     public const int MaxBodyChars = 4000;
 
     /// <summary>Messages per inbox poll — keep delivery batches small even when the

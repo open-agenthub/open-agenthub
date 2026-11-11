@@ -41,6 +41,7 @@ public sealed class ExternalSessionAccess(
             throw new KeyNotFoundException();
         if (priority || interrupt)
             throw new ArgumentException("Shared sessions accept normal-priority messages only.");
+        AgentMessaging.EnsureInboxSupported(grant.Session.UiMode);
         var message = new SessionMessageRecord
         {
             Id = Guid.NewGuid().ToString("n")[..12], ToSessionId = id,

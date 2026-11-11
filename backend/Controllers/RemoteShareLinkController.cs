@@ -1,4 +1,5 @@
 using AgentHub.Api.Ee.Sharing;
+using AgentHub.Api.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -33,6 +34,7 @@ public sealed class RemoteShareLinkController(ExternalShareLinkService links) : 
             return await links.SendAsync(request.Link, request.Message, ct) is { } result
                 ? Ok(result) : NotFound();
         }
+        catch (ChatInboxUnsupportedException error) { return Conflict(new { code = ChatInboxUnsupportedException.Code, message = error.Message }); }
         catch (ArgumentException) { return BadRequest(new { error = "message_body_invalid" }); }
     }
 }
