@@ -299,6 +299,10 @@ export const api = {
   setUserSeat: (owner, licensed) => req('PUT', `/admin/users/${encodeURIComponent(owner)}/license`, { licensed }),
   // Who is an admin and why; role 'admin' | 'user' | null (null = groups decide). 409 = last admin.
   adminRoles: () => req('GET', '/admin/roles'),
+  // Handing API-key data to a team-login user (#501, docs/apikey-handover.md).
+  adminHandover: () => req('GET', '/admin/handover'),
+  previewHandover: (from, to, includeCredentials) => req('POST', '/admin/handover/preview', { from, to, includeCredentials }),
+  applyHandover: (token) => req('POST', '/admin/handover/apply', { token }),
   setUserRole: (owner, role) => req('PUT', `/admin/users/${encodeURIComponent(owner)}/role`, { role }),
   adminRoleAudit: () => req('GET', '/admin/roles/audit'),
   // Personal library: MCP catalog (raw/api) + skills.

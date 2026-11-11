@@ -25,6 +25,7 @@ public sealed class AdminHandoverController(AdminAccess access, OwnerHandoverSer
         var (sources, targets) = await handover.CandidatesAsync(ct);
         return Ok(new
         {
+            available = handover.Available,
             sources,
             targets = targets.Select(t => new { t.Owner, t.Email, t.DisplayName }),
             history = await handover.HistoryAsync(ct),

@@ -48,6 +48,9 @@ public sealed class OwnerHandoverService(
     public static readonly TimeSpan TokenLifetime = TimeSpan.FromMinutes(15);
     private sealed record Plan(string From, string To, bool Credentials, Dictionary<string, long> Moves, DateTime CreatedAt);
 
+    /// <summary>Only an OIDC install has users to hand data to.</summary>
+    public bool Available => hubAuth?.Mode == Auth.HubAuthMode.Oidc;
+
     private IDataProtector Protector(string admin) => protection.CreateProtector("owner-handover-v1", admin);
 
     /// <summary>The names data can come from, and the users it can go to.</summary>
