@@ -1057,6 +1057,8 @@ public sealed class InternalController : ControllerBase
         }
 
         var (priority, interrupt) = AgentMessaging.ResolveFlags(body.Priority, body.Interrupt);
+        if (AgentMessaging.RequiresChatInbox(target.UiMode, priority))
+            return Conflict(new { code = ChatInboxUnsupportedException.Code, message = ChatInboxUnsupportedException.Detail });
         var message = new SessionMessageRecord
         {
             Id = Guid.NewGuid().ToString("n")[..12],

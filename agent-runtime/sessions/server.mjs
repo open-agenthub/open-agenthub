@@ -21,7 +21,10 @@ const register = (name, config, handler) => server.registerTool(name, config, as
   try { return await handler(input ?? {}); }
   catch (error) {
     const code = safeError(error);
-    return { content: [{ type: 'text', text: JSON.stringify({ error: code }) }], isError: true };
+    const message = code === 'chat_inbox_unsupported'
+      ? 'This session runs in chat mode and cannot receive inbox messages. Type into its conversation as the owner or a Collaborator instead.'
+      : undefined;
+    return { content: [{ type: 'text', text: JSON.stringify({ error: code, message }) }], isError: true };
   }
 });
 
@@ -231,6 +234,7 @@ register('agent_inbox', {
 if (process.env.AGENTHUB_CONTAINERS_ENABLED === '1') registerContainerTools(register, client);
 
 function safeError(error) {
+  if (error?.detail === 'chat_inbox_unsupported') return error.detail;
   const message = error instanceof Error ? error.message : '';
   const stable = [
     'sessions_backend_not_configured', 'sessions_backend_invalid_url',

@@ -56,3 +56,40 @@ Before: copy this directory into a detached worktree at `e9c4a3bc^`, build it wi
 `-p:DefineConstants=BASELINE` (that tree has no `TerminalProxy.ReadForUpgradeAsync`), serve that
 worktree's frontend, use a fresh database, and run the script with `EXPECT=before`. The pod can stay
 the same, because the pod was not where the bug was.
+
+## Fleet and link sends to a live legacy chat session (#568)
+
+The same host also serves the production callback send and share-link send endpoints,
+including real fleet dispatch and message storage. `fleet.mjs` calls the actual in-pod
+and external stdio MCP servers. It opens the production chat WebSocket as a
+Collaborator and verifies composer messages before and after the fleet sends against
+the mock model log. The host's proof-only message endpoint observes Postgres without
+consuming the inbox.
+
+Start the mock model and chat pod as above, using a fresh model log and a dedicated
+Postgres database. The real pod can stay up across both runs because the fix is in
+send-time validation. Start the host with `PROOF_URL=http://127.0.0.1:17680`, using
+the same URL for the script. Make the runtime's Node dependencies available to the
+two stdio servers, for example with links to `/opt/session-agent/node_modules` at
+`agent-runtime/sessions/node_modules` and `mcp/agenthub/node_modules`.
+
+Build the host against the baseline by copying this proof's `Program.cs` into
+a checkout at `7784d872` and building that checkout's host project. From the
+feature checkout, run:
+
+```sh
+touch <scratch>/model/model.log
+node tests/ChatCollaboratorProof/fleet.mjs before <scratch>/model/model.log
+```
+
+Restart the host with the feature checkout's build against the same database, then run:
+
+```sh
+node tests/ChatCollaboratorProof/fleet.mjs after <scratch>/model/model.log
+```
+
+The baseline must add three pending rows (named Collaborator, Collaborator link,
+and same owner). The fixed host must return `chat_inbox_unsupported` with actionable
+guidance and add zero pending rows. The script compares existing rows by ID to verify
+that the fix leaves the old inbox intact. Both runs deny both Viewer sends and
+deliver a same-owner priority message to the real pinned CLI.

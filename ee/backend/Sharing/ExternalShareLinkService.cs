@@ -31,6 +31,7 @@ public sealed class ExternalShareLinkService(
         if (resolved is null || !SessionAccessRules.CanWriteTerminal(resolved.Level)) return null;
         var text = AgentMessaging.NormalizeBody(body)
             ?? throw new ArgumentException("message_body_invalid");
+        AgentMessaging.EnsureInboxSupported(resolved.Session.UiMode);
         // A link is an anonymous capability, not evidence of the holder's account identity.
         var message = new SessionMessageRecord
         {

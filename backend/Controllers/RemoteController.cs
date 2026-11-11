@@ -257,9 +257,12 @@ public sealed class RemoteController : ControllerBase
             }
             catch (KeyNotFoundException) { return NotFound(); }
             catch (ArgumentException error) { return BadRequest(error.Message); }
+            catch (ChatInboxUnsupportedException error) { return Conflict(new { code = ChatInboxUnsupportedException.Code, message = error.Message }); }
         }
 
         var (priority, interrupt) = AgentMessaging.ResolveFlags(req.Priority, req.Interrupt);
+        if (AgentMessaging.RequiresChatInbox(target.UiMode, priority))
+            return Conflict(new { code = ChatInboxUnsupportedException.Code, message = ChatInboxUnsupportedException.Detail });
         var message = new SessionMessageRecord
         {
             Id = Guid.NewGuid().ToString("n")[..12],

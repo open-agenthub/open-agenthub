@@ -33,18 +33,25 @@ var podPort = int.Parse(Environment.GetEnvironmentVariable("PROOF_AGENT_PORT") ?
 var uiMode = Environment.GetEnvironmentVariable("PROOF_UI_MODE") ?? SessionUiMode.Chat;
 
 // An API server that knows one running pod and nothing else.
+var pod = new
+{
+    kind = "Pod", apiVersion = "v1",
+    metadata = new
+    {
+        name = $"session-{SessionId}", @namespace = "sharing-proof",
+        labels = new Dictionary<string, string> { ["agenthub.dev/session"] = SessionId }
+    },
+    status = new { phase = "Running", podIP = "127.0.0.1" }
+};
 var kube = WebApplication.CreateBuilder();
 var kubeApp = kube.Build();
 kubeApp.Urls.Add("http://127.0.0.1:0");
-kubeApp.MapGet("/{**path}", (string path) =>
+kubeApp.MapGet("/{**path}", (HttpContext ctx, string path) =>
 {
     if (path.EndsWith($"/pods/session-{SessionId}"))
-        return Results.Json(new
-        {
-            kind = "Pod", apiVersion = "v1",
-            metadata = new { name = $"session-{SessionId}", @namespace = "sharing-proof" },
-            status = new { phase = "Running", podIP = "127.0.0.1" }
-        });
+        return Results.Json(pod);
+    if (path.EndsWith("/pods") && ctx.Request.Query["labelSelector"].ToString().Contains("agenthub.dev/owner=u-2bd806c97f0e00af"))
+        return Results.Json(new { kind = "PodList", apiVersion = "v1", items = new[] { pod } });
     if (!path.EndsWith("pods") && !path.EndsWith("cronjobs") && !path.EndsWith("secrets"))
         return Results.Json(new { kind = "Status", apiVersion = "v1", status = "Failure", reason = "NotFound", code = 404 }, statusCode: 404);
     return Results.Json(new
@@ -70,6 +77,12 @@ builder.Services.AddAuthentication("proof").AddScheme<AuthenticationSchemeOption
 builder.Services.AddAuthorization();
 builder.Services.AddSharingRecipientSearch();
 builder.Services.AddSingleton<PermissionStore>();
+builder.Services.AddSingleton<PostgresSessionMessageStore>();
+builder.Services.AddSingleton<ISessionMessageStore>(s => s.GetRequiredService<PostgresSessionMessageStore>());
+builder.Services.AddSingleton<ISessionMcpPolicyReader>(s => s.GetRequiredService<SessionShareStore>());
+builder.Services.AddSingleton<ILibraryAccess>(_ => DispatchProxy.Create<ILibraryAccess, StoppedBrowser>());
+builder.Services.AddSingleton<ExternalShareLinkService>();
+builder.Services.AddSingleton<ISessionMessageDelivery, SessionMessageDelivery>();
 builder.Services.AddSingleton<PostgresProjectStore>();
 builder.Services.AddSingleton<IBrowserService>(_ => DispatchProxy.Create<IBrowserService, StoppedBrowser>());
 builder.Services.AddSingleton<ISessionService>(s => new KubernetesSessionService(
@@ -109,13 +122,30 @@ await app.Services.GetRequiredService<SessionShareStore>().InitializeAsync();
 await sessions.UpsertAsync(new SessionRecord
 {
     Id = SessionId, Owner = "alice", Title = "Pairing", Status = SessionStatus.Running, Agent = AgentKind.Claude,
-    Mode = SessionMode.Interactive, UiMode = uiMode, CallbackToken = CallbackToken
+    Mode = SessionMode.Interactive, UiMode = uiMode, CallbackToken = CallbackToken, ProjectId = "fleet"
+});
+
+await app.Services.GetRequiredService<PostgresSessionMessageStore>().InitializeAsync();
+await sessions.UpsertAsync(new SessionRecord
+{
+    Id = "sender", Owner = "bob", Title = "Sender", CallbackToken = "callback-token-sender"
+});
+await sessions.UpsertAsync(new SessionRecord
+{
+    Id = "viewer", Owner = "carol", Title = "Viewer", CallbackToken = "callback-token-viewer"
+});
+await sessions.UpsertAsync(new SessionRecord
+{
+    Id = "owned", Owner = "alice", Title = "Owned Sender", CallbackToken = "callback-token-owned", ProjectId = "fleet"
 });
 
 app.UseWebSockets();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+// Peek without consuming the inbox so the proof can distinguish queued and delivered rows.
+app.MapGet("/proof/messages", (PostgresSessionMessageStore messages, CancellationToken ct) =>
+    messages.ListPageAsync("alice", SessionId, null, 20, ct));
 app.MapGet("/api/config", () => new { authMode = "insecureDev" });
 app.MapGet("/api/projects", () => Array.Empty<object>());
 app.MapGet("/api/sessions/order", () => Array.Empty<string>());
@@ -175,7 +205,9 @@ sealed class OnlySharing : IApplicationFeatureProvider<ControllerFeature>
     {
         foreach (var controller in feature.Controllers.Where(controller =>
             controller.AsType() != typeof(SharingController) && controller.AsType() != typeof(SharedSessionsController)
-                && controller.AsType() != typeof(SessionsController)).ToArray())
+                && controller.AsType() != typeof(SessionsController)
+                && controller.AsType() != typeof(InternalController)
+                && controller.AsType() != typeof(RemoteShareLinkController)).ToArray())
             feature.Controllers.Remove(controller);
     }
 }

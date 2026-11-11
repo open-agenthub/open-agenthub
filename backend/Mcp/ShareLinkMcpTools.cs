@@ -19,6 +19,7 @@ public sealed class ShareLinkMcpTools(ExternalShareLinkService links)
     public async Task<AgentMessageSendResult> Send(string link, string message, CancellationToken ct = default)
     {
         try { return await links.SendAsync(link, message, ct) ?? throw new McpException("session_not_found"); }
+        catch (ChatInboxUnsupportedException error) { throw new McpException(error.Message); }
         catch (ArgumentException) { throw new McpException("message_body_invalid"); }
     }
 }
