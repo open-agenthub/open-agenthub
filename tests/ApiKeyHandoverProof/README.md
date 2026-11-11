@@ -48,3 +48,11 @@ The script starts the issuer, Vite, the kubelet stand-in and the backend itself,
   CLI's sign-in screen.
 - RBAC: the chart's role already grants get/list/create/update/delete on secrets and cronjobs,
   which is all the handover uses; the backend here runs as cluster admin.
+
+## The card's wording alone (#574)
+
+`intro-card.mjs` serves `HandoverCard.vue` on its own through the frontend's Vite, with the
+`/api/admin/handover` answer stubbed inside the page, so a change to the card's text can be looked
+at in any browser without the rig above: `node tests/ApiKeyHandoverProof/intro-card.mjs <repo> [port]`
+(after `npm ci` in `frontend/`), then open `http://<host>:<port>/`. It shows only what the card
+renders for a fixed overview; nothing about the backend.
