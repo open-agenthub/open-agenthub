@@ -76,9 +76,10 @@ const total = (counts) => Object.values(counts || {}).reduce((a, b) => a + b, 0)
 <template>
   <section v-if="visible" class="card" data-handover>
     <div class="card-head"><h4>Hand over data from API-key mode</h4></div>
-    <p class="note">
-      What was created with the API key belongs to its owner name, not to a person. Choose the
-      team-login user it belongs to; they must have signed in once. Their own data stays as it is.
+    <p class="note" data-handover-intro>
+      Data created with the API key belongs to the configured API-key owner account, rather than
+      automatically to a team-login (OIDC) identity. Choose the team-login user it belongs to; they
+      must have signed in once. Their own data stays as it is.
     </p>
     <p v-if="error" class="err" data-handover-error>{{ error }}</p>
 
