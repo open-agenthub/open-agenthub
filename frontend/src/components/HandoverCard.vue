@@ -32,7 +32,8 @@ async function load() {
   error.value = ''
   try {
     data.value = await api.adminHandover()
-    if (!from.value && data.value.sources.length) from.value = data.value.sources[0].owner
+    // After a handover the source just emptied is no longer offered; move on to the next one.
+    if (!data.value.sources.some(s => s.owner === from.value)) from.value = data.value.sources[0]?.owner || ''
   } catch (e) { error.value = errorText(e) }
 }
 onMounted(load)
@@ -55,6 +56,8 @@ async function apply() {
   try {
     done.value = await api.applyHandover(preview.value.token)
     preview.value = null
+    // The opt-in is per handover: the next one starts without credentials again.
+    credentials.value = false
     await load()
   } catch (e) { error.value = errorText(e) }
   finally { busy.value = false }
@@ -173,7 +176,8 @@ h5 { margin: 14px 0 6px; font-size: 13px; }
 .note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0 0 10px; }
 .form { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; }
 .form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
-.form label.check { flex-direction: row; align-items: center; gap: 6px; color: inherit; }
+.form label.check { flex-direction: row; align-items: center; gap: 6px; color: inherit; white-space: nowrap; }
+.form label.check input { width: auto; margin: 0; }
 .form select { min-width: 200px; max-width: 100%; }
 .warn { flex-basis: 100%; margin: 0; font-size: 12px; color: #d9a13c; }
 table { border-collapse: collapse; font-size: 12px; width: 100%; }

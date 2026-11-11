@@ -97,3 +97,24 @@ describe('HandoverCard', () => {
     expect(wrapper.find('[data-handover-result]').exists()).toBe(false)
   })
 })
+
+describe('HandoverCard after a handover', () => {
+  beforeEach(() => vi.resetAllMocks())
+
+  it('moves on to the next source and starts without credentials again', async () => {
+    mocks.api.adminHandover
+      .mockResolvedValueOnce(overview({ sources: [{ owner: 'admin', sessions: 3, projects: 1 }, { owner: 'dev', sessions: 1, projects: 0 }] }))
+      .mockResolvedValueOnce(overview({ sources: [{ owner: 'dev', sessions: 1, projects: 0 }] }))
+    mocks.api.previewHandover.mockResolvedValue(preview({ includeCredentials: true }))
+    mocks.api.applyHandover.mockResolvedValue({ audit: { to: 'alice' }, cleanupPending: false })
+    const wrapper = mount(HandoverCard)
+    await flushPromises()
+    await choose(wrapper, true)
+    await wrapper.find('[data-handover-preview]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-handover-apply]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-handover-from]').element.value).toBe('dev')
+    expect(wrapper.find('[data-handover-credentials]').element.checked).toBe(false)
+  })
+})
