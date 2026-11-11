@@ -41,6 +41,7 @@ public static class SchemaScript
         "McpClientStore",
         "McpServerStore",
         "McpSigningKeyStore",
+        "OwnerHandoverStore",
         "PermissionStore",
         "PortGrantStore",
         "PostgresBrowserLeaseStore",

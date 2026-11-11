@@ -250,7 +250,8 @@ onBeforeUnmount(() => {
       </div>
       <div v-for="d in singleUserOwnerData" :key="d.owner" class="banner warn" role="status" data-single-user-owner-banner>
         <span>Data from API-key mode is under the name <code>{{ d.owner }}</code> ({{ d.sessions }} session(s), {{ d.projects }} project(s)).
-          It is visible to the identity-provider user with the same username. Check it before that username can sign in.</span>
+          It is visible to the identity-provider user with the same username. Check it before that username can sign in,
+          or hand it over to its owner under Admin → Users &amp; seats.</span>
       </div>
       <div v-if="banner" class="banner" :class="banner.kind">
         <span>{{ banner.text }}</span>

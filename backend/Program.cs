@@ -218,6 +218,10 @@ builder.Services.AddSingleton<AgentHub.Api.Admin.SingleUserOwnerStore>();
 builder.Services.AddSingleton<AgentHub.Api.Admin.ISingleUserOwnerStore>(sp =>
     sp.GetRequiredService<AgentHub.Api.Admin.SingleUserOwnerStore>());
 builder.Services.AddSingleton<AgentHub.Api.Admin.AdminAccess>();
+// Handing API-key data to a team-login user (#501, docs/apikey-handover.md).
+builder.Services.AddSingleton(sp => new AgentHub.Api.Admin.OwnerHandoverStore(sp.GetRequiredService<IConfiguration>()));
+builder.Services.AddSingleton<AgentHub.Api.Services.IOwnerHandoverRuntime>(sp => (KubernetesSessionService)sp.GetRequiredService<ISessionService>());
+builder.Services.AddSingleton<AgentHub.Api.Admin.OwnerHandoverService>();
 // Enterprise: user groups from OAuth token claims, group→role mapping and admin usage limits.
 // Registered unconditionally — every provider self-gates on the license at call time.
 builder.Services.AddSingleton<AgentHub.Api.Ee.Identity.UserGroupStore>();
@@ -604,6 +608,7 @@ await AgentHub.Api.Persistence.SchemaMigrationLock.RunAsync(app.Configuration, a
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Admin.UserRoleStore>().InitializeAsync();
         var singleUserOwners = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Admin.SingleUserOwnerStore>();
         await singleUserOwners.InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Admin.OwnerHandoverStore>().InitializeAsync();
         // Recorded on every start in these modes, because after a switch to OIDC the configuration
         // no longer says which name the key acted as, and its data is still there under it.
         if (hubAuth.Mode == AgentHub.Api.Auth.HubAuthMode.ApiKey)

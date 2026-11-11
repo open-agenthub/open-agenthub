@@ -159,6 +159,29 @@ public static class SessionSecretStore
         return true;
     }
 
+    /// <summary>
+    /// Adds <paramref name="source"/>'s entries to <paramref name="data"/> by id, values included,
+    /// for an owner handover (docs/apikey-handover.md). Ids stay, so moved sessions and projects
+    /// keep pointing at their secrets. An id already present is left as it is, which makes a rerun
+    /// a no-op; entries beyond <see cref="MaxEntries"/> are not added. Returns (added or already
+    /// present, not added for lack of room).
+    /// </summary>
+    public static (int Moved, int Skipped) MergeFrom(IDictionary<string, byte[]> data, IDictionary<string, byte[]>? source)
+    {
+        var entries = Read(data).ToList();
+        int moved = 0, skipped = 0;
+        foreach (var entry in Read(source))
+        {
+            if (entries.Any(e => e.Id == entry.Id)) { moved++; continue; }
+            if (entries.Count >= MaxEntries) { skipped++; continue; }
+            data[ValueKey(entry.Id)] = Value(source, entry.Id)!;
+            entries.Add(entry);
+            moved++;
+        }
+        WriteIndex(data, entries);
+        return (moved, skipped);
+    }
+
     /// <summary>Why a name cannot be used for a delivery, or null when it can.</summary>
     public static string? NameError(string? name, string delivery)
     {
