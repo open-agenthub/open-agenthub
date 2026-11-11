@@ -37,6 +37,7 @@ SCHEMA_NAMES = frozenset((
     'McpClientStore',
     'McpServerStore',
     'McpSigningKeyStore',
+    'OwnerHandoverStore',
     'PermissionStore',
     'PortGrantStore',
     'PostgresBrowserLeaseStore',
