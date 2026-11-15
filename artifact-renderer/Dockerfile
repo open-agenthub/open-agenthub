@@ -1,11 +1,11 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:11.0 AS build
 WORKDIR /src
 COPY artifact-renderer/ArtifactRenderer.csproj artifact-renderer/
 RUN dotnet restore artifact-renderer/ArtifactRenderer.csproj
 COPY artifact-renderer/ artifact-renderer/
 RUN dotnet publish artifact-renderer/ArtifactRenderer.csproj -c Release -o /app --no-restore
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0
+FROM mcr.microsoft.com/dotnet/aspnet:11.0
 USER root
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libreoffice-core libreoffice-writer libreoffice-calc libreoffice-impress fonts-dejavu-core \
